@@ -84,6 +84,14 @@ agents:
 
 Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 
+### Cache control injection
+
+Injects Anthropic-style `cache_control: { type: "ephemeral" }` markers into system/developer message content blocks, enabling explicit prompt caching on compatible providers.
+
+- Default: depends on provider.
+- `cacheStyle: "anthropic"`: enable on any provider.
+- `cacheStyle: null`: force-disable.
+
 ## Provider behavior
 
 ### Anthropic (direct API)
@@ -96,9 +104,9 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
 - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
 
-### OpenRouter Anthropic models
+### OpenRouter
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_control` on system/developer prompt blocks to improve prompt-cache reuse.
+- Anthropic model refs (`openrouter/anthropic/*`) get automatic `cache_control` injection. See [`cache_control` injection](#cache_control-injection).
 
 ### Other providers
 
