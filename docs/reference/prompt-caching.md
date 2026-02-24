@@ -84,13 +84,13 @@ agents:
 
 Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 
-### Cache control injection
+### Cache style
 
-Injects Anthropic-style `cache_control: { type: "ephemeral" }` markers into system/developer message content blocks, enabling explicit prompt caching on compatible providers.
+`cacheStyle` controls provider-specific cache hint injection strategy.
 
 - Default: depends on provider.
-- `cacheStyle: "anthropic"`: enable on any provider.
-- `cacheStyle: null`: force-disable.
+- `"anthropic"`: injects `cache_control: { type: "ephemeral" }` breakpoints for prefix caching. Marks system/developer messages and the last user/assistant message.
+- `null`: force-disable.
 
 ## Provider behavior
 
@@ -106,7 +106,7 @@ Injects Anthropic-style `cache_control: { type: "ephemeral" }` markers into syst
 
 ### OpenRouter
 
-- Anthropic model refs (`openrouter/anthropic/*`) get automatic `cache_control` injection. See [`cache_control` injection](#cache_control-injection).
+- For `openrouter/anthropic/*` model refs, OpenClaw defaults to `cacheStyle: "anthropic"`, injecting `cache_control` on system/developer prompt blocks to improve prompt-cache reuse.
 
 ### Other providers
 

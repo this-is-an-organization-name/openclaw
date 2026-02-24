@@ -352,9 +352,23 @@ type PayloadMessage = {
 };
 
 /**
- * Inject cache_control: { type: "ephemeral" } into system/developer messages.
- * Used by `cacheStyle: "anthropic"` and the OpenRouter Anthropic auto-detection.
+ * Inject cache_control: { type: "ephemeral" } into a message's content.
  */
+function injectCacheControlOnMessage(msg: PayloadMessage, requireTextType: boolean) {
+  if (typeof msg.content === "string") {
+    msg.content = [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }];
+  } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+    const last = msg.content[msg.content.length - 1];
+    if (
+      last &&
+      typeof last === "object" &&
+      (!requireTextType || (last as Record<string, unknown>).type === "text")
+    ) {
+      (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+    }
+  }
+}
+
 function createSystemCacheControlWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -365,19 +379,33 @@ function createSystemCacheControlWrapper(baseStreamFn: StreamFn | undefined): St
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as PayloadMessage[]) {
-            if (msg.role !== "system" && msg.role !== "developer") {
+            if (msg.role === "system" || msg.role === "developer") {
+              injectCacheControlOnMessage(msg, false);
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+function createConversationCacheControlWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const messages = (payload as Record<string, unknown>)?.messages;
+        if (Array.isArray(messages)) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i] as PayloadMessage;
+            if (msg.role !== "user" && msg.role !== "assistant") {
               continue;
             }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
-              }
-            }
+            injectCacheControlOnMessage(msg, true);
+            break;
           }
         }
         originalOnPayload?.(payload);
@@ -548,10 +576,14 @@ export function applyExtraParamsToAgent(
   }
 
   if (
-    merged?.cacheStyle === "anthropic" ||
-    (merged?.cacheStyle === undefined && isOpenRouterAnthropicModel(provider, modelId))
+    (isOpenRouterAnthropicModel(provider, modelId) && merged?.cacheStyle === undefined) ||
+    merged?.cacheStyle === "anthropic"
   ) {
     agent.streamFn = createSystemCacheControlWrapper(agent.streamFn);
+  }
+  // pi-ai injects conversation breakpoints for OpenRouter Anthropic; skip here to avoid duplication
+  if (!isOpenRouterAnthropicModel(provider, modelId) && merged?.cacheStyle === "anthropic") {
+    agent.streamFn = createConversationCacheControlWrapper(agent.streamFn);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
