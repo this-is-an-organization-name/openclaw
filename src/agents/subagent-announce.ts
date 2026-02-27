@@ -739,8 +739,7 @@ async function sendSubagentAnnounceDirectly(params: {
         : "";
     const completionTo =
       typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
-    const hasCompletionDirectTarget =
-      !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
+    const hasCompletionDirectTarget = false;
 
     if (
       params.expectsCompletionMessage &&
