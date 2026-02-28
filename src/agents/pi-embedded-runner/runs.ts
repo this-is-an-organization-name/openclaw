@@ -24,10 +24,12 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
-  if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
-  }
+  //tmpfix: cron sessions_spawn(mode:"run") completion not delivered to parent
+  //   steer() is always-safe (queue push); isStreaming gate caused session lane deadlock in cron turns
+  // if (!handle.isStreaming()) {
+  //   diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+  //   return false;
+  // }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return false;
