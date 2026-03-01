@@ -879,16 +879,6 @@ async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
-  //tmpfix: cron sessions_spawn(mode:"run") completion not delivered to parent
-  //   pre-dispatch steer bypasses session lane deadlock (active turn holds lane, announce waits for lane)
-  if (params.expectsCompletionMessage && !params.signal?.aborted) {
-    const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-    const sessionId = entry?.sessionId;
-    if (sessionId && queueEmbeddedPiMessage(sessionId, params.triggerMessage)) {
-      return { delivered: true, path: "steered" };
-    }
-  }
-
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
