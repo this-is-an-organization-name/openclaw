@@ -106,6 +106,30 @@ export async function dragViaPlaywright(opts: {
   }
 }
 
+// tmpfix: raw mouse input
+export async function rawMouseViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  steps: Array<{ type: "down" | "move" | "up"; x: number; y: number; button?: "left" | "right" | "middle"; delay?: number }>;
+}): Promise<void> {
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  for (const step of opts.steps) {
+    if (step.type === "move") {
+      await page.mouse.move(step.x, step.y);
+    } else if (step.type === "down") {
+      await page.mouse.move(step.x, step.y);
+      await page.mouse.down({ button: step.button ?? "left" });
+    } else if (step.type === "up") {
+      await page.mouse.move(step.x, step.y);
+      await page.mouse.up({ button: step.button ?? "left" });
+    }
+    if ((step.delay ?? 50) > 0) {
+      await new Promise(r => setTimeout(r, Math.min(step.delay ?? 50, 5000)));
+    }
+  }
+}
+
 export async function selectOptionViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

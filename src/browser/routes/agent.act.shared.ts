@@ -1,3 +1,4 @@
+// tmpfix: added "mouse" for raw mouse input
 export const ACT_KINDS = [
   "click",
   "close",
@@ -5,6 +6,7 @@ export const ACT_KINDS = [
   "evaluate",
   "fill",
   "hover",
+  "mouse",
   "scrollIntoView",
   "press",
   "resize",

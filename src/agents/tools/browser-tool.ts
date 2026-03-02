@@ -276,6 +276,7 @@ export function createBrowserTool(opts?: {
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      'act:mouse sends raw mouse events: request.steps=[{type:"down"|"move"|"up", x:<number>, y:<number>, button?:"left"|"right"|"middle", delay?:<ms>}]. Default 50ms delay between steps; set delay:0 to disable. Use for canvas drag, map pan, or any coordinate-based mouse interaction.',
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),

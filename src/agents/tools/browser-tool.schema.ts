@@ -1,12 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 
+// tmpfix: added "mouse" for raw mouse input
 const BROWSER_ACT_KINDS = [
   "click",
   "type",
   "press",
   "hover",
   "drag",
+  "mouse",
   "select",
   "fill",
   "resize",
@@ -75,6 +77,8 @@ const BrowserActSchema = Type.Object({
   textGone: Type.Optional(Type.String()),
   // evaluate
   fn: Type.Optional(Type.String()),
+  // tmpfix: mouse (raw mouse input - steps: [{type:"down"|"move"|"up", x, y, button?}])
+  steps: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
 });
 
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.

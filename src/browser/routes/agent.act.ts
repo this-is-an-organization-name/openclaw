@@ -309,6 +309,32 @@ export function registerBrowserAgentActRoutes(
               result,
             });
           }
+          // tmpfix: raw mouse input
+          case "mouse": {
+            const steps = Array.isArray(body.steps) ? body.steps : [];
+            if (!steps.length) {
+              return jsonError(res, 400, "steps are required");
+            }
+            const parsed = steps
+              .filter((s): s is Record<string, unknown> => s && typeof s === "object")
+              .map(s => ({
+                type: toStringOrEmpty(s.type) as "down" | "move" | "up",
+                x: toNumber(s.x) ?? 0,
+                y: toNumber(s.y) ?? 0,
+                button: (toStringOrEmpty(s.button) || undefined) as "left" | "right" | "middle" | undefined,
+                delay: toNumber(s.delay) ?? undefined,
+              }))
+              .filter(s => s.type === "down" || s.type === "move" || s.type === "up");
+            if (!parsed.length) {
+              return jsonError(res, 400, "steps must contain down/move/up entries");
+            }
+            await pw.rawMouseViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              steps: parsed,
+            });
+            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+          }
           case "close": {
             await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });
             return res.json({ ok: true, targetId: tab.targetId });

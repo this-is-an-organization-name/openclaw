@@ -94,6 +94,7 @@ const pwMocks = vi.hoisted(() => ({
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
   pressKeyViaPlaywright: vi.fn(async () => {}),
+  rawMouseViaPlaywright: vi.fn(async () => {}), // tmpfix: raw mouse input
   responseBodyViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/api/data",
     status: 200,

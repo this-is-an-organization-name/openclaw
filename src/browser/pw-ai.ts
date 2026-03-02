@@ -37,6 +37,7 @@ export {
   navigateViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
+  rawMouseViaPlaywright, // tmpfix: raw mouse input
   resizeViewportViaPlaywright,
   responseBodyViaPlaywright,
   scrollIntoViewViaPlaywright,

@@ -13,6 +13,12 @@ export type BrowserFormField = {
 };
 
 export type BrowserActRequest =
+  // tmpfix: raw mouse input
+  | {
+      kind: "mouse";
+      steps: Array<{ type: "down" | "move" | "up"; x: number; y: number; button?: "left" | "right" | "middle"; delay?: number }>;
+      targetId?: string;
+    }
   | {
       kind: "click";
       ref: string;
