@@ -107,6 +107,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
+    { name: "save", description: "Save memory to disk" }, // tmpfix: pre-reset memory flush
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
     { name: "settings", description: "Open settings" },
@@ -148,6 +149,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
+    "/save", // tmpfix: pre-reset memory flush
     "/new or /reset",
     "/abort",
     "/settings",
