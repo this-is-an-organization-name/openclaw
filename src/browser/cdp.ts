@@ -72,7 +72,7 @@ export async function captureScreenshot(opts: {
       format,
       ...(quality !== undefined ? { quality } : {}),
       fromSurface: true,
-      captureBeyondViewport: true,
+      captureBeyondViewport: Boolean(opts.fullPage), // tmpfix: was hardcoded true, capturing beyond viewport even when fullPage=false
       ...(clip ? { clip } : {}),
     })) as { data?: string };
 
