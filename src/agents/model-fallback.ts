@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
+  resolveAgentModelPerModelFallbacks,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import {
@@ -276,6 +277,13 @@ function resolveFallbackCandidates(params: {
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
       return params.fallbacksOverride;
+    }
+    const perModelMap = resolveAgentModelPerModelFallbacks(params.cfg?.agents?.defaults?.model);
+    if (perModelMap) {
+      const key = modelKey(normalizedPrimary.provider, normalizedPrimary.model);
+      if (key in perModelMap) {
+        return perModelMap[key];
+      }
     }
     const configuredFallbacks = resolveAgentModelFallbackValues(
       params.cfg?.agents?.defaults?.model,

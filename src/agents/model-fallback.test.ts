@@ -1159,6 +1159,99 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
   });
+
+  describe("per-model fallbacks (perModelFallbacks)", () => {
+    it("uses per-model fallback chain when configured for the active model", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              perModelFallbacks: {
+                "google/gemini-2.5-pro": ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        },
+      });
+      const run = vi.fn().mockRejectedValueOnce(new Error("rate limit")).mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "google",
+        model: "gemini-2.5-pro",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-2.5-pro");
+      expect(run).toHaveBeenNthCalledWith(2, "google", "gemini-2.5-flash");
+    });
+
+    it("falls through to global fallbacks when no per-model entry matches", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              perModelFallbacks: {
+                "google/gemini-2.5-pro": ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        },
+      });
+      const run = vi.fn().mockRejectedValueOnce(new Error("rate limit")).mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    });
+
+    it("still appends configured primary as last-resort after per-model chain", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              perModelFallbacks: {
+                "google/gemini-2.5-pro": ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        },
+      });
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("fail 1"))
+        .mockRejectedValueOnce(new Error("fail 2"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "google",
+        model: "gemini-2.5-pro",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-2.5-pro");
+      expect(run).toHaveBeenNthCalledWith(2, "google", "gemini-2.5-flash");
+      expect(run).toHaveBeenNthCalledWith(3, "openai", "gpt-4.1-mini");
+    });
+  });
 });
 
 describe("runWithImageModelFallback", () => {
