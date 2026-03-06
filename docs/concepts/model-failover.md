@@ -139,6 +139,31 @@ timeouts that exhausted profile rotation (other errors do not advance fallback).
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
 
+### Per-model fallback chains
+
+You can configure independent fallback chains for specific models via
+`agents.defaults.model.perModelFallbacks`. When the active model matches a key in
+this map, its fallback array is used instead of the global `fallbacks` list.
+The configured primary model is still appended as a last resort.
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: openai/gpt-4.1-mini
+      fallbacks:
+        - anthropic/claude-haiku-3-5
+      perModelFallbacks:
+        google/gemini-2.5-pro:
+          - google/gemini-2.5-flash
+        anthropic/claude-sonnet-4:
+          - anthropic/claude-haiku-3-5
+```
+
+In this example, `/model google/gemini-2.5-pro` failing would try
+`google/gemini-2.5-flash`, then `openai/gpt-4.1-mini` (primary) as last resort.
+Models without a `perModelFallbacks` entry use the global `fallbacks` chain as before.
+
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:
@@ -146,7 +171,7 @@ See [Gateway configuration](/gateway/configuration) for:
 - `auth.profiles` / `auth.order`
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
 - `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
-- `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
+- `agents.defaults.model.primary` / `agents.defaults.model.fallbacks` / `agents.defaults.model.perModelFallbacks`
 - `agents.defaults.imageModel` routing
 
 See [Models](/concepts/models) for the broader model selection and fallback overview.

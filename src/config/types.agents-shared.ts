@@ -11,6 +11,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Per-model fallback chains (key: provider/model, value: ordered fallback models). */
+      perModelFallbacks?: Record<string, string[]>;
     };
 
 export type AgentSandboxConfig = {
