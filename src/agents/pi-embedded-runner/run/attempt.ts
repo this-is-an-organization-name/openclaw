@@ -359,6 +359,68 @@ function trimWhitespaceFromToolCallNamesInMessage(
   normalizeToolCallIdsInMessage(message);
 }
 
+const STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+function wrapStreamWithIdleTimeout(
+  stream: ReturnType<typeof streamSimple>,
+  idleTimeoutMs: number,
+  onTimeout: () => void,
+): ReturnType<typeof streamSimple> {
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const clearIdleTimer = () => {
+        if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      };
+
+      const resetIdleTimer = () => {
+        clearIdleTimer();
+        idleTimer = setTimeout(() => {
+          clearIdleTimer();
+          onTimeout();
+        }, idleTimeoutMs);
+      };
+
+      resetIdleTimer();
+
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (result.done) { clearIdleTimer(); } else { resetIdleTimer(); }
+          return result;
+        },
+        async return(value?: unknown) {
+          clearIdleTimer();
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          clearIdleTimer();
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+  return stream;
+}
+
+export function wrapStreamFnWithIdleTimeout(
+  baseFn: StreamFn,
+  idleTimeoutMs: number,
+  onTimeout: () => void,
+): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then(stream =>
+        wrapStreamWithIdleTimeout(stream, idleTimeoutMs, onTimeout),
+      );
+    }
+    return wrapStreamWithIdleTimeout(maybeStream, idleTimeoutMs, onTimeout);
+  };
+}
+
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
@@ -1133,6 +1195,17 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      activeSession.agent.streamFn = wrapStreamFnWithIdleTimeout(
+        activeSession.agent.streamFn,
+        STREAM_IDLE_TIMEOUT_MS,
+        () => {
+          log.warn(
+            `stream idle timeout (${STREAM_IDLE_TIMEOUT_MS}ms): aborting run runId=${params.runId}`,
+          );
+          abortRun(true);
+        },
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
