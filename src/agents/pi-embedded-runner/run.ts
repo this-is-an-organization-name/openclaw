@@ -6,6 +6,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { sleep } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
@@ -648,8 +649,11 @@ export async function runEmbeddedPiAgent(
       };
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_SAME_MODEL_RETRIES = 3;
+      const SAME_MODEL_RETRY_DELAY_MS = 5_000;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
+      let sameModelRetries = 0;
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
@@ -1140,6 +1144,16 @@ export async function runEmbeddedPiAgent(
           // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+
+          if (shouldRotate && sameModelRetries < MAX_SAME_MODEL_RETRIES) {
+            sameModelRetries++;
+            const delayMs = sameModelRetries * SAME_MODEL_RETRY_DELAY_MS;
+            log.warn(
+              `retrying same model ${provider}/${modelId} in ${delayMs}ms before failover (attempt ${sameModelRetries}/${MAX_SAME_MODEL_RETRIES})`,
+            );
+            await sleep(delayMs);
+            continue;
+          }
 
           if (shouldRotate) {
             if (lastProfileId) {
