@@ -26,9 +26,11 @@ import {
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import {
+  createConversationCacheControlWrapper,
   createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
+  createSystemCacheControlWrapper,
+  isOpenRouterAnthropicModel,
   isProxyReasoningUnsupported,
 } from "./proxy-stream-wrappers.js";
 
@@ -404,7 +406,17 @@ export function applyExtraParamsToAgent(
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  if (
+    (isOpenRouterAnthropicModel(provider, modelId) && merged?.cacheStyle === undefined) ||
+    merged?.cacheStyle === "anthropic"
+  ) {
+    agent.streamFn = createSystemCacheControlWrapper(agent.streamFn);
+  }
+  // pi-ai injects conversation breakpoints for OpenRouter Anthropic; skip here to avoid duplication
+  if (!isOpenRouterAnthropicModel(provider, modelId) && merged?.cacheStyle === "anthropic") {
+    agent.streamFn = createConversationCacheControlWrapper(agent.streamFn);
   }
 
   if (provider === "kilocode") {

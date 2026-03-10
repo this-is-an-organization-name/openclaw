@@ -15,7 +15,7 @@ function resolveKilocodeAppHeaders(): Record<string, string> {
   return { [KILOCODE_FEATURE_HEADER]: feature };
 }
 
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
+export function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
   return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
@@ -59,37 +59,65 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   }
 }
 
-export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+type PayloadMessage = {
+  role?: string;
+  content?: unknown;
+};
+
+function injectCacheControlOnMessage(msg: PayloadMessage, requireTextType: boolean) {
+  if (typeof msg.content === "string") {
+    msg.content = [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }];
+  } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+    const last = msg.content[msg.content.length - 1];
+    if (
+      last &&
+      typeof last === "object" &&
+      (!requireTextType || (last as Record<string, unknown>).type === "text")
+    ) {
+      (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+    }
+  }
+}
+
+export function createSystemCacheControlWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
-    ) {
-      return underlying(model, context, options);
-    }
-
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
-          for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
-            if (msg.role !== "system" && msg.role !== "developer") {
+          for (const msg of messages as PayloadMessage[]) {
+            if (msg.role === "system" || msg.role === "developer") {
+              injectCacheControlOnMessage(msg, false);
+            }
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
+export function createConversationCacheControlWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const messages = (payload as Record<string, unknown>)?.messages;
+        if (Array.isArray(messages)) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i] as PayloadMessage;
+            if (msg.role !== "user" && msg.role !== "assistant") {
               continue;
             }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
-              }
-            }
+            injectCacheControlOnMessage(msg, true);
+            break;
           }
         }
         return originalOnPayload?.(payload, model);
