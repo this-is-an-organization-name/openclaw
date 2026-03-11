@@ -242,6 +242,22 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
+  // tmpfix: carbon emits all ws debug events on a shared emitter without tagging the ws instance.
+  // when a stale ws close event arrives after a newer ws has already connected (e.g. after
+  // InvalidSession op 9), onGatewayDebug pushes connected:false and clears the hello poll,
+  // leaving the status stuck. this probe periodically checks the actual gateway state and
+  // corrects the snapshot. also keeps lastEventAt fresh on quiet guilds (prevents stale-socket).
+  const CONNECTED_PROBE_INTERVAL_MS = 5_000;
+  const connectedProbeId = setInterval(() => {
+    if (gateway?.isConnected && !lifecycleStopping) {
+      reconnectStallWatchdog.disarm();
+      pushStatus({ connected: true, lastEventAt: Date.now() });
+    }
+  }, CONNECTED_PROBE_INTERVAL_MS);
+  if (typeof connectedProbeId === "object" && "unref" in connectedProbeId) {
+    connectedProbeId.unref();
+  }
+
   // If the gateway is already connected when the lifecycle starts (the
   // "WebSocket connection opened" debug event was emitted before we
   // registered the listener above), push the initial connected status now.
@@ -324,6 +340,7 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     lifecycleStopping = true;
+    clearInterval(connectedProbeId);
     params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
