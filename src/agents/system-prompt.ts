@@ -24,7 +24,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   }
   return [
     "## 技能（必须执行）",
-    "回复前：扫描 <available_skills> 的 <description> 条目。",
+    "书写输出内容前：扫描 <available_skills> 的 <description> 条目。",
     `- 如果恰好有一个技能明确适用：使用 \`${params.readToolName}\` 读取其 <location> 处的 SKILL.md，然后遵循它。`,
     "- 如果有多个可能适用：选择最具体的那个，然后读取/遵循它。",
     "- 如果没有明确适用的：不要读取任何 SKILL.md。",
@@ -48,10 +48,10 @@ function buildMemorySection(params: {
   }
   const lines = [
     "## 记忆检索",
-    "回答关于先前工作、决策、日期、人物、偏好或待办事项的问题前：先对 MEMORY.md + memory/*.md 运行 memory_search；然后使用 memory_get 拉取所需的行。",
+    "处理关于先前工作、决策、日期、人物、偏好或待办事项的事务前：先对 MEMORY.md + memory/*.md 运行 memory_search；然后使用 memory_get 拉取所需的行。",
   ];
   if (params.citationsMode === "off") {
-    lines.push("引用已禁用：除非被明确要求，否则不要在回复中提及文件路径或行号。");
+    lines.push("引用已禁用：除非被明确要求，否则不要在输出内容中提及文件路径或行号。");
   } else {
     lines.push("引用：当有助于来源核查记忆片段时，包含 Source: <path#line>。");
   }
@@ -103,8 +103,8 @@ function buildReplyTagsSection(isMinimal: boolean) {
   }
   return [
     "## 回复标签",
-    "要在支持的平台上请求原生回复/引用，在你的回复中包含一个标签：",
-    "- 回复标签必须是消息的第一个 token（前面不能有文本/换行）：[[reply_to_current]] 你的回复。",
+    "要在支持的平台上请求原生回复/引用，在你的输出内容中包含一个标签：",
+    "- 回复标签必须是消息的第一个 token（前面不能有文本/换行）：[[reply_to_current]] 你的输出内容。",
     "- [[reply_to_current]] 回复触发消息。",
     "- 优先使用 [[reply_to_current]]。仅当 id 被明确提供时（例如由上游指令或工具提供）才使用 [[reply_to:<id>]]。",
     "标签内允许空格（例如 [[ reply_to_current ]] / [[ reply_to: 123 ]]）。",
@@ -126,10 +126,10 @@ function buildMessagingSection(params: {
   }
   return [
     "## 消息",
-    "- 在当前会话中回复 → 自动路由到来源频道（Signal、Telegram 等）",
+    "- 在当前会话中书写输出内容 → 自动路由到来源频道（Signal、Telegram 等）",
     "- 跨会话消息 → 使用 sessions_send(sessionKey, message)",
     "- 子代理编排 → 使用 subagents(action=list|steer|kill)",
-    `- 运行时生成的完成事件可能要求报告最新进展。用你正常的语气改写这些事件进而发送更新（绝对不要直接转发原始的内部元数据，也不要默认仅回复 ${SILENT_REPLY_TOKEN}）。`,
+    `- 运行时生成的完成事件可能要求报告最新进展。重新书写这些事件的输出内容进而发送更新（绝对不要直接转发原始的内部元数据，也不要默认仅输出 ${SILENT_REPLY_TOKEN}）。`,
     "- 决不能使用 exec/curl 绕开框架直接发送消息；OpenClaw 会在内部处理所有的路由分发。",
     params.availableTools.has("message")
       ? [
@@ -138,7 +138,7 @@ function buildMessagingSection(params: {
           "- 使用 `message` 进行主动发送 + 频道操作（投票、反应等）。",
           "- 对于 `action=send`，包含 `to` 和 `message`。",
           `- 如果配置了多个频道，传入 \`channel\` (${params.messageChannelOptions})。`,
-          `- 如果你使用 \`message\`（\`action=send\`）来交付终端可见的回复，仅回复：${SILENT_REPLY_TOKEN}（避免重复回复）。`,
+          `- 如果你使用 \`message\`（\`action=send\`）来交付终端可见的输出内容，仅输出：${SILENT_REPLY_TOKEN}（避免重复输出）。`,
           params.inlineButtonsEnabled
             ? "- 内联按钮已支持。使用 `action=send` 并带上 `buttons=[[{text,callback_data,style?}]]`；`style` 可以是 `primary`、`success` 或 `danger`。"
             : params.runtimeChannel
@@ -349,12 +349,12 @@ export function buildAgentSystemPrompt(params: {
   const reasoningHint = params.reasoningTagHint
     ? [
         "所有内部分析必须在 <think>...</think> 内。不要在 <think> 之外输出任何分析、推理或决策过程。对外界来说，<think> 内的一切都是不可见的。",
-        "每一轮回复必须严格遵循先 <think>...</think> 再 <final>...</final> 的格式，中间不夹杂其他文本。只有 <final> 标签内的文本会展示给外部终端。",
+        "每次书写输出内容必须严格遵循先 <think>...</think> 再 <final>...</final> 的格式，中间不夹杂其他文本。只有 <final> 标签内的文本会展示给外部终端。",
         "格式示例：",
         "<think>",
         "（此处展开完整的分析、推理与自我检验过程）",
         "</think>",
-        "<final>（此处写对外可见的最终回复）</final>",
+        "<final>（此处写对外可见的最终输出内容）</final>",
         "无论是复杂任务还是日常行为——哪怕只是闲聊或回应一句话——每次行动前都必须在 <think> 内展开充分思考。",
         "不允许直接跳到结论。得出判断后，立刻寻找它失败的场景或反例；找到了就修正方案再继续推演，没找到才确认。",
         "整个过程必须体现在 <think> 中，不能省略。",
@@ -413,11 +413,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "你是一个独立 AI 智能体，目前正在 OpenClaw 框架中运行。";
+    return "你是一个自主运行的 AI 系统，目前正运行在 OpenClaw 框架中。默认情况下，你书写的所有输出内容均用作日志记录用途。若你在随后加载了一份 SOUL.md，按其中规则书写输出内容和执行行动。";
   }
 
   const lines = [
-    "你是一个独立 AI 智能体，目前正在 OpenClaw 框架中运行。",
+    "你是一个自主运行的 AI 系统，目前正运行在 OpenClaw 框架中。默认情况下，你书写的所有输出内容均用作日志记录用途。若你在随后加载了一份 SOUL.md，按其中规则书写输出内容和执行行动。",
     "",
     "## 工具",
     "工具可用性（经策略过滤）：",
@@ -586,7 +586,7 @@ export function buildAgentSystemPrompt(params: {
             "仅在真正相关时反应：",
             "- 对关键的对话信息或特定进展作出确认",
             "- 在符合自身人格的前提下，克制地表达适当情感",
-            "- 避免对常规消息或你自己的回复做出反应",
+            "- 避免对常规消息或你自己的输出内容做出反应",
             "准则：极度克制，每 5-10 次交流最多 1 个反应。",
           ].join("\n")
         : [
@@ -621,7 +621,9 @@ export function buildAgentSystemPrompt(params: {
       });
       lines.push("以下项目上下文文件已加载：");
       if (hasSoulFile) {
-        lines.push("如果存在 SOUL.md，以其人设和语调为准。");
+        lines.push(
+          "如果存在 SOUL.md：SOUL.md 定义此系统的完整行为规则——按其中规则书写输出内容和执行行动，并应用其中的人设和语调。",
+        );
       }
       lines.push("");
     }
@@ -640,12 +642,12 @@ export function buildAgentSystemPrompt(params: {
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {
     lines.push(
-      "## 静默回复",
-      `无言以对或无需作答时，仅回复：${SILENT_REPLY_TOKEN}`,
+      "## 静默输出",
+      `无言以对或无需作答时，仅输出：${SILENT_REPLY_TOKEN}`,
       "",
       "⚠️ 规则：",
-      "- 它必须是你的整条消息——不能有其他内容",
-      `- 绝不可将其附加到实际回复后（真实回复中绝不能包含 "${SILENT_REPLY_TOKEN}"）`,
+      "- 它必须是你的整条输出内容——不能有其他内容",
+      `- 绝不可将其附加到实际输出内容后（真实输出内容中绝不能包含 "${SILENT_REPLY_TOKEN}"）`,
       "- 绝不可用 markdown 或代码块包裹它",
       "",
       `❌ 错误："已完成排查... ${SILENT_REPLY_TOKEN}"`,
@@ -660,10 +662,10 @@ export function buildAgentSystemPrompt(params: {
     lines.push(
       "## 心跳",
       heartbeatPromptLine,
-      "当接收到心跳轮询（指的是一条与上述心跳提示词匹配的后台信号），且此时并没有需要特别关注的事项，请极其精确地仅回复：",
+      "当接收到心跳轮询（指的是一条与上述心跳提示词匹配的后台信号），且此时并没有需要特别关注的事项，请极其精确地仅输出：",
       "HEARTBEAT_OK",
-      'OpenClaw 将提取消息开头/结尾的 "HEARTBEAT_OK" 作为心跳确认（并在内部将其丢弃）。',
-      '假如有需要关注/告警的事项，切勿包含 "HEARTBEAT_OK"；应直接回复告警文本。',
+      'OpenClaw 将提取输出内容开头/结尾的 "HEARTBEAT_OK" 作为心跳确认（并在内部将其丢弃）。',
+      '假如有需要关注/告警的事项，切勿包含 "HEARTBEAT_OK"；应直接输出告警文本。',
       "",
     );
   }
