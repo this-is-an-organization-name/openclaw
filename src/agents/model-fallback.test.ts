@@ -555,7 +555,7 @@ describe("runWithModelFallback", () => {
       usageStat: {
         cooldownUntil: Date.now() + 5 * 60_000,
       },
-      expectedReason: "rate_limit",
+      expectedReason: "unknown",
     });
   });
 
@@ -1415,7 +1415,10 @@ describe("runWithModelFallback", () => {
           },
         },
       });
-      const run = vi.fn().mockRejectedValueOnce(new Error("rate limit")).mockResolvedValueOnce("ok");
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("rate limit"))
+        .mockResolvedValueOnce("ok");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1444,7 +1447,10 @@ describe("runWithModelFallback", () => {
           },
         },
       });
-      const run = vi.fn().mockRejectedValueOnce(new Error("rate limit")).mockResolvedValueOnce("ok");
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("rate limit"))
+        .mockResolvedValueOnce("ok");
 
       const result = await runWithModelFallback({
         cfg,

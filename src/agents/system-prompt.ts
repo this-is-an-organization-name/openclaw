@@ -200,7 +200,6 @@ export function buildAgentSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
-  bootstrapTruncationWarningLines?: string[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -266,6 +265,7 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "显示与 /status 等效的状态卡片（用量 + 时间 + 推理/详细/提权）；用于响应关于模型使用情况的提问（📊 session_status）；可选配置每会话的模型覆盖",
     image: "使用配置的图像模型分析图片",
+    image_generate: "使用配置的图像生成模型生成图片",
   };
 
   const toolOrder = [
@@ -293,6 +293,7 @@ export function buildAgentSystemPrompt(params: {
     "subagents",
     "session_status",
     "image",
+    "image_generate",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -605,13 +606,10 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const contextFiles = params.contextFiles ?? [];
-  const bootstrapTruncationWarningLines = (params.bootstrapTruncationWarningLines ?? []).filter(
-    (line) => line.trim().length > 0,
-  );
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
+  if (validContextFiles.length > 0) {
     lines.push("# 项目上下文", "");
     if (validContextFiles.length > 0) {
       const hasSoulFile = validContextFiles.some((file) => {
@@ -627,13 +625,7 @@ export function buildAgentSystemPrompt(params: {
       }
       lines.push("");
     }
-    if (bootstrapTruncationWarningLines.length > 0) {
-      lines.push("⚠ 引导截断警告：");
-      for (const warningLine of bootstrapTruncationWarningLines) {
-        lines.push(`- ${warningLine}`);
-      }
-      lines.push("");
-    }
+
     for (const file of validContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }

@@ -1,5 +1,6 @@
 // tmpfix: added "mouse" for raw mouse input
 export const ACT_KINDS = [
+  "batch",
   "click",
   "close",
   "drag",
