@@ -2,6 +2,7 @@ import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { buildMemoryPromptSection } from "../memory/prompt-section.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -43,20 +44,10 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
-    return [];
-  }
-  const lines = [
-    "## 记忆检索",
-    "处理关于先前工作、决策、日期、人物、偏好或待办事项的事务前：先对 MEMORY.md + memory/*.md 运行 memory_search；然后使用 memory_get 拉取所需的行。",
-  ];
-  if (params.citationsMode === "off") {
-    lines.push("引用已禁用：除非被明确要求，否则不要在输出内容中提及文件路径或行号。");
-  } else {
-    lines.push("引用：当有助于来源核查记忆片段时，包含 Source: <path#line>。");
-  }
-  lines.push("");
-  return lines;
+  return buildMemoryPromptSection({
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode,
+  });
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
