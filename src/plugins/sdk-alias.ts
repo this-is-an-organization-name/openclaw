@@ -223,10 +223,10 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 }
 
 export function resolvePluginSdkScopedAliasMap(
-  params: { modulePath?: string } = {},
+  params: LoaderModuleResolveParams & { modulePath?: string } = {},
 ): Record<string, string> {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({ ...params, modulePath });
   if (!packageRoot) {
     return {};
   }
@@ -285,17 +285,24 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-export function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+export function buildPluginLoaderAliasMap(
+  modulePath: string,
+  loaderModuleUrl?: string,
+): Record<string, string> {
+  const extraHints: LoaderModuleResolveParams = loaderModuleUrl
+    ? { moduleUrl: loaderModuleUrl }
+    : {};
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
     modulePath,
+    ...extraHints,
   });
-  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
+  const extensionApiAlias = resolveExtensionApiAlias({ modulePath, ...extraHints });
   return {
     ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+    ...resolvePluginSdkScopedAliasMap({ modulePath, ...extraHints }),
   };
 }
 
