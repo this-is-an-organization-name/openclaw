@@ -7,6 +7,7 @@
 
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
+import { mergePrependContextValues } from "./types.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
@@ -174,10 +175,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext: concatOptionalTextSegments({
-      left: acc?.prependContext,
-      right: next.prependContext,
-    }),
+    prependContext: mergePrependContextValues(acc?.prependContext, next.prependContext),
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,

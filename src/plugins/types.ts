@@ -1487,9 +1487,54 @@ export type PluginHookBeforePromptBuildEvent = {
   messages: unknown[];
 };
 
+export type PrependContextItem = string | { content: string; transient?: true };
+export type PrependContextValue = PrependContextItem | PrependContextItem[];
+
+function normalizePrependContextToArray(val: PrependContextValue): PrependContextItem[] {
+  if (typeof val === "string") {
+    return [val];
+  }
+  if (Array.isArray(val)) {
+    return val;
+  }
+  return [val];
+}
+
+function resolveItem(item: PrependContextItem): { content: string; transient: boolean } {
+  if (typeof item === "string") {
+    return { content: item, transient: false };
+  }
+  return { content: item.content, transient: item.transient === true };
+}
+
+export function resolvePrependContextItems(
+  val: PrependContextValue | undefined,
+): { content: string; transient: boolean }[] {
+  if (val === undefined) {
+    return [];
+  }
+  return normalizePrependContextToArray(val).map(resolveItem);
+}
+
+export function mergePrependContextValues(
+  left: PrependContextValue | undefined,
+  right: PrependContextValue | undefined,
+): PrependContextValue | undefined {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  if (typeof left === "string" && typeof right === "string") {
+    return `${left}\n\n${right}`;
+  }
+  return [...normalizePrependContextToArray(left), ...normalizePrependContextToArray(right)];
+}
+
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
-  prependContext?: string;
+  prependContext?: PrependContextValue;
   /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.

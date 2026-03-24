@@ -22,10 +22,12 @@ import {
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import type {
-  PluginHookAgentContext,
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforePromptBuildResult,
+import {
+  resolvePrependContextItems,
+  mergePrependContextValues,
+  type PluginHookAgentContext,
+  type PluginHookBeforeAgentStartResult,
+  type PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
@@ -1520,10 +1522,10 @@ export async function resolvePromptBuildHookResult(params: {
       : undefined);
   return {
     systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
-    prependContext: joinPresentTextSegments([
+    prependContext: mergePrependContextValues(
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
-    ]),
+    ),
     prependSystemContext: joinPresentTextSegments([
       promptBuildResult?.prependSystemContext,
       legacyResult?.prependSystemContext,
@@ -2079,6 +2081,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let removeEphemeralPrependContextWrap: (() => void) | undefined;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -2237,6 +2240,50 @@ export async function runEmbeddedAttempt(
           ),
         ),
       });
+
+      let ephemeralPrependContext: string | undefined;
+      {
+        type TransformContextFn = (
+          messages: unknown[],
+          signal: AbortSignal,
+        ) => unknown[] | Promise<unknown[]>;
+        const agentRecord = activeSession.agent as unknown as {
+          transformContext?: TransformContextFn;
+        };
+        const prev = agentRecord.transformContext;
+        agentRecord.transformContext = async (messages: unknown[], signal: AbortSignal) => {
+          const result = prev ? await prev.call(agentRecord, messages, signal) : messages;
+          if (!ephemeralPrependContext) {
+            return result;
+          }
+          const arr = Array.isArray(result) ? [...result] : [...messages];
+          for (let i = arr.length - 1; i >= 0; i--) {
+            const msg = arr[i] as { role?: string; content?: unknown } | undefined;
+            if (msg?.role !== "user") {
+              continue;
+            }
+            if (typeof msg.content === "string") {
+              arr[i] = { ...msg, content: `${ephemeralPrependContext}\n\n${msg.content}` };
+            } else if (Array.isArray(msg.content)) {
+              const blocks = [...(msg.content as { type?: string; text?: string }[])];
+              const textIdx = blocks.findIndex((b) => b.type === "text");
+              if (textIdx >= 0) {
+                blocks[textIdx] = {
+                  ...blocks[textIdx],
+                  text: `${ephemeralPrependContext}\n\n${blocks[textIdx].text ?? ""}`,
+                };
+                arr[i] = { ...msg, content: blocks };
+              }
+            }
+            break;
+          }
+          return arr;
+        };
+        removeEphemeralPrependContextWrap = () => {
+          agentRecord.transformContext = prev;
+        };
+      }
+
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
@@ -2778,10 +2825,18 @@ export async function runEmbeddedAttempt(
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
         {
-          if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
+          const items = resolvePrependContextItems(hookResult?.prependContext);
+          const persisted = items.filter((i) => !i.transient).map((i) => i.content);
+          const ephemeral = items.filter((i) => i.transient).map((i) => i.content);
+          if (persisted.length > 0) {
+            const text = persisted.join("\n\n");
+            effectivePrompt = `${text}\n\n${effectivePrompt}`;
+            log.debug(`hooks: prepended persisted context (${text.length} chars)`);
+          }
+          if (ephemeral.length > 0) {
+            ephemeralPrependContext = ephemeral.join("\n\n");
             log.debug(
-              `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+              `hooks: prepended ephemeral context (${ephemeralPrependContext.length} chars)`,
             );
           }
           const legacySystemPrompt =
@@ -3273,6 +3328,7 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
+      removeEphemeralPrependContextWrap?.();
       removeToolResultContextGuard?.();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
