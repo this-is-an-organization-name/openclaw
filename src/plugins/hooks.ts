@@ -176,6 +176,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
     prependContext: mergePrependContextValues(acc?.prependContext, next.prependContext),
+    appendContext: mergePrependContextValues(acc?.appendContext, next.appendContext),
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,

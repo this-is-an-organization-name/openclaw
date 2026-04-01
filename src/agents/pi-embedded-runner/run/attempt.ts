@@ -1526,6 +1526,10 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
     ),
+    appendContext: mergePrependContextValues(
+      promptBuildResult?.appendContext,
+      legacyResult?.appendContext,
+    ),
     prependSystemContext: joinPresentTextSegments([
       promptBuildResult?.prependSystemContext,
       legacyResult?.prependSystemContext,
@@ -2242,6 +2246,7 @@ export async function runEmbeddedAttempt(
       });
 
       let ephemeralPrependContext: string | undefined;
+      let ephemeralAppendContext: string | undefined;
       {
         type TransformContextFn = (
           messages: unknown[],
@@ -2253,7 +2258,7 @@ export async function runEmbeddedAttempt(
         const prev = agentRecord.transformContext;
         agentRecord.transformContext = async (messages: unknown[], signal: AbortSignal) => {
           const result = prev ? await prev.call(agentRecord, messages, signal) : messages;
-          if (!ephemeralPrependContext) {
+          if (!ephemeralPrependContext && !ephemeralAppendContext) {
             return result;
           }
           const arr = Array.isArray(result) ? [...result] : [...messages];
@@ -2263,17 +2268,23 @@ export async function runEmbeddedAttempt(
               continue;
             }
             if (typeof msg.content === "string") {
-              arr[i] = { ...msg, content: `${ephemeralPrependContext}\n\n${msg.content}` };
+              let text = msg.content;
+              if (ephemeralPrependContext) {
+                text = `${ephemeralPrependContext}\n\n${text}`;
+              }
+              if (ephemeralAppendContext) {
+                text = `${text}\n\n${ephemeralAppendContext}`;
+              }
+              arr[i] = { ...msg, content: text };
             } else if (Array.isArray(msg.content)) {
               const blocks = [...(msg.content as { type?: string; text?: string }[])];
-              const textIdx = blocks.findIndex((b) => b.type === "text");
-              if (textIdx >= 0) {
-                blocks[textIdx] = {
-                  ...blocks[textIdx],
-                  text: `${ephemeralPrependContext}\n\n${blocks[textIdx].text ?? ""}`,
-                };
-                arr[i] = { ...msg, content: blocks };
+              if (ephemeralPrependContext) {
+                blocks.unshift({ type: "text", text: ephemeralPrependContext });
               }
+              if (ephemeralAppendContext) {
+                blocks.push({ type: "text", text: ephemeralAppendContext });
+              }
+              arr[i] = { ...msg, content: blocks };
             }
             break;
           }
@@ -2838,6 +2849,18 @@ export async function runEmbeddedAttempt(
             log.debug(
               `hooks: prepended ephemeral context (${ephemeralPrependContext.length} chars)`,
             );
+          }
+          const appendItems = resolvePrependContextItems(hookResult?.appendContext);
+          const appendPersisted = appendItems.filter((i) => !i.transient).map((i) => i.content);
+          const appendEphemeral = appendItems.filter((i) => i.transient).map((i) => i.content);
+          if (appendPersisted.length > 0) {
+            const text = appendPersisted.join("\n\n");
+            effectivePrompt = `${effectivePrompt}\n\n${text}`;
+            log.debug(`hooks: appended persisted context (${text.length} chars)`);
+          }
+          if (appendEphemeral.length > 0) {
+            ephemeralAppendContext = appendEphemeral.join("\n\n");
+            log.debug(`hooks: appended ephemeral context (${ephemeralAppendContext.length} chars)`);
           }
           const legacySystemPrompt =
             typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
