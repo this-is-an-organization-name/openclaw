@@ -2229,6 +2229,28 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+
+      // tmpfix: skip pi-coding-agent auto-retry for rate-limit (429) errors
+      {
+        const orig = (activeSession as any)._isRetryableError;
+        if (typeof orig !== "function") {
+          throw new TypeError(
+            "AgentSession._isRetryableError missing or renamed; " +
+            "pi-coding-agent internals changed — update the rate-limit auto-retry override",
+          );
+        }
+        (activeSession as any)._isRetryableError = function (msg: any) {
+          if (
+            msg?.stopReason === "error" &&
+            msg?.errorMessage &&
+            /rate[_ ]limit|too many requests|\b429\b/i.test(msg.errorMessage)
+          ) {
+            return false;
+          }
+          return orig.call(this, msg);
+        };
+      }
+
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
