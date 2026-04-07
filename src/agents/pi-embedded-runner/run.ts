@@ -1012,6 +1012,7 @@ export async function runEmbeddedPiAgent(
             promptError,
             timedOut,
             timedOutDuringCompaction,
+            noFailover, // tmpfix: stream degeneration loop detection
             sessionIdUsed,
             lastAssistant,
           } = attempt;
@@ -1541,7 +1542,7 @@ export async function runEmbeddedPiAgent(
             continue;
           }
 
-          if (shouldRotate) {
+          if (shouldRotate && !noFailover) { // tmpfix: stream degeneration loop detection
             if (lastProfileId) {
               const reason = timedOut ? "timeout" : assistantProfileFailureReason;
               // Skip cooldown for timeouts: a timeout is model/network-specific,

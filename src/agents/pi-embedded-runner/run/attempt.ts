@@ -940,7 +940,149 @@ function trimWhitespaceFromToolCallNamesInMessage(
   normalizeToolCallIdsInMessage(message);
 }
 
-const STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+// tmpfix: stream degeneration loop detection
+const STREAM_DEGENERATION_BUFFER_SIZE = 4000;
+const STREAM_DEGENERATION_CHECK_INTERVAL = 200;
+const STREAM_DEGENERATION_MIN_PATTERN_LENGTH = 40;
+const STREAM_DEGENERATION_CONFIRM_COUNT = 3;
+
+function detectStreamDegeneration(buffer: string): boolean {
+  if (buffer.length < STREAM_DEGENERATION_MIN_PATTERN_LENGTH * 3) {
+    return false;
+  }
+  const maxPatternLength = Math.floor(buffer.length / 3);
+  for (
+    let patternLength = STREAM_DEGENERATION_MIN_PATTERN_LENGTH;
+    patternLength <= maxPatternLength;
+    patternLength += 1
+  ) {
+    const a = buffer.slice(-patternLength);
+    const b = buffer.slice(-patternLength * 2, -patternLength);
+    const c = buffer.slice(-patternLength * 3, -patternLength * 2);
+    if (a === b && b === c) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type DegenerationTracker = {
+  buffer: string;
+  charsSinceLastCheck: number;
+  confirmCount: number;
+};
+
+function checkDegenerationTracker(tracker: DegenerationTracker, delta: string): boolean {
+  tracker.buffer += delta;
+  tracker.charsSinceLastCheck += delta.length;
+  if (tracker.buffer.length > STREAM_DEGENERATION_BUFFER_SIZE) {
+    tracker.buffer = tracker.buffer.slice(-STREAM_DEGENERATION_BUFFER_SIZE);
+  }
+  if (tracker.charsSinceLastCheck < STREAM_DEGENERATION_CHECK_INTERVAL) {
+    return false;
+  }
+  tracker.charsSinceLastCheck = 0;
+  if (detectStreamDegeneration(tracker.buffer)) {
+    tracker.confirmCount += 1;
+    return tracker.confirmCount >= STREAM_DEGENERATION_CONFIRM_COUNT;
+  }
+  tracker.confirmCount = 0;
+  return false;
+}
+
+type DegenerationEvent = {
+  stream: "thinking" | "text";
+  bufferLength: number;
+  sample: string;
+};
+
+function wrapStreamDetectDegeneration(
+  stream: ReturnType<typeof streamSimple>,
+  onDegeneration: (event: DegenerationEvent) => void,
+): ReturnType<typeof streamSimple> {
+  let thinkingTracker: DegenerationTracker = {
+    buffer: "",
+    charsSinceLastCheck: 0,
+    confirmCount: 0,
+  };
+  let textTracker: DegenerationTracker = {
+    buffer: "",
+    charsSinceLastCheck: 0,
+    confirmCount: 0,
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (result.done) {
+            return result;
+          }
+          const event = result.value as { type?: string; delta?: string };
+          if (event?.type === "thinking_start") {
+            thinkingTracker = {
+              buffer: "",
+              charsSinceLastCheck: 0,
+              confirmCount: 0,
+            };
+          } else if (event?.type === "text_start") {
+            textTracker = {
+              buffer: "",
+              charsSinceLastCheck: 0,
+              confirmCount: 0,
+            };
+          } else if (event?.type === "thinking_delta" && typeof event.delta === "string") {
+            if (checkDegenerationTracker(thinkingTracker, event.delta)) {
+              onDegeneration({
+                stream: "thinking",
+                bufferLength: thinkingTracker.buffer.length,
+                sample: thinkingTracker.buffer.slice(-200),
+              });
+              return { done: true as const, value: undefined };
+            }
+          } else if (event?.type === "text_delta" && typeof event.delta === "string") {
+            if (checkDegenerationTracker(textTracker, event.delta)) {
+              onDegeneration({
+                stream: "text",
+                bufferLength: textTracker.buffer.length,
+                sample: textTracker.buffer.slice(-200),
+              });
+              return { done: true as const, value: undefined };
+            }
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+
+  return stream;
+}
+
+function wrapStreamFnDetectDegeneration(
+  baseFn: StreamFn,
+  onDegeneration: (event: DegenerationEvent) => void,
+): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then(stream =>
+        wrapStreamDetectDegeneration(stream, onDegeneration),
+      );
+    }
+    return wrapStreamDetectDegeneration(maybeStream, onDegeneration);
+  };
+}
+
+const STREAM_IDLE_TIMEOUT_MS = 30 * 1000;
 
 function wrapStreamWithIdleTimeout(
   stream: ReturnType<typeof streamSimple>,
@@ -2533,6 +2675,18 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // tmpfix: stream degeneration loop detection
+      activeSession.agent.streamFn = wrapStreamFnDetectDegeneration(
+        activeSession.agent.streamFn,
+        (event) => {
+          log.warn(
+            `stream degeneration loop detected in ${event.stream}: aborting run runId=${params.runId} bufferLength=${event.bufferLength} sample=${JSON.stringify(event.sample)}`,
+          );
+          noFailover = true;
+          abortRun(true);
+        },
+      );
+
       activeSession.agent.streamFn = wrapStreamFnWithIdleTimeout(
         activeSession.agent.streamFn,
         STREAM_IDLE_TIMEOUT_MS,
@@ -2621,6 +2775,7 @@ export async function runEmbeddedAttempt(
       let yieldAborted = false;
       let timedOut = false;
       let timedOutDuringCompaction = false;
+      let noFailover = false; // tmpfix: stream degeneration loop detection
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
       const makeTimeoutAbortReason = (): Error => {
@@ -3363,6 +3518,7 @@ export async function runEmbeddedAttempt(
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,
+        noFailover: noFailover || undefined, // tmpfix: stream degeneration loop detection
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
