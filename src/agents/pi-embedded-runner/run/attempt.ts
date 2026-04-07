@@ -3085,7 +3085,16 @@ export async function runEmbeddedAttempt(
           let stripped = 0;
           for (;;) {
             const leaf = sessionManager.getLeafEntry();
-            if (!leaf || leaf.type !== "message") { break; }
+            if (!leaf) { break; }
+            if (leaf.type !== "message") {
+              if (leaf.parentId) {
+                sessionManager.branch(leaf.parentId);
+              } else {
+                sessionManager.resetLeaf();
+              }
+              stripped++;
+              continue;
+            }
             const msg = leaf.message;
             const isFailedStop =
               msg.role === "assistant" &&
