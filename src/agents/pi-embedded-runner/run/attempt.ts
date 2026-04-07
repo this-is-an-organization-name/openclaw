@@ -3087,9 +3087,11 @@ export async function runEmbeddedAttempt(
             const leaf = sessionManager.getLeafEntry();
             if (!leaf || leaf.type !== "message") { break; }
             const msg = leaf.message;
-            const isEmptyFailedAssistant =
+            const isFailedStop =
               msg.role === "assistant" &&
-              msg.stopReason === "error" &&
+              ((msg as any).stopReason === "error" || (msg as any).stopReason === "aborted");
+            const isEmptyFailedAssistant =
+              isFailedStop &&
               (!msg.content || msg.content.length === 0);
             const isDuplicateUser =
               msg.role === "user" &&
@@ -3098,7 +3100,7 @@ export async function runEmbeddedAttempt(
                 (c: any) => c.type === "text" && typeof c.text === "string" && c.text.includes(params.prompt),
               );
             if (!isEmptyFailedAssistant && !isDuplicateUser) {
-              if (msg.role === "assistant" && msg.stopReason === "error") {
+              if (isFailedStop) {
                 retryRedelivery = true;
               }
               break;
