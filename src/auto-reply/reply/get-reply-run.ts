@@ -361,13 +361,14 @@ export async function runPreparedReply(
   const bodyWithEvents = prependEvents(effectiveBaseBody);
   prefixedBodyBase = prependEvents(prefixedBodyBase);
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
-  const threadStarterBody = ctx.ThreadStarterBody?.trim();
-  const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
-  const threadContextNote = threadHistoryBody
-    ? `[Thread history - for context]\n${threadHistoryBody}`
-    : threadStarterBody
-      ? `[Thread starter - for context]\n${threadStarterBody}`
-      : undefined;
+  // const threadStarterBody = ctx.ThreadStarterBody?.trim();
+  // const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  // const threadContextNote = threadHistoryBody
+  //   ? `[Thread history - for context]\n${threadHistoryBody}`
+  //   : threadStarterBody
+  //     ? `[Thread starter - for context]\n${threadStarterBody}`
+  //     : undefined;
+  const threadContextNote = undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,

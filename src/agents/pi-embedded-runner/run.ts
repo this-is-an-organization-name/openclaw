@@ -1530,11 +1530,12 @@ export async function runEmbeddedPiAgent(
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
-          if (shouldRotate && sameModelRetries < MAX_SAME_MODEL_RETRIES) {
+          const maxSameModelRetries = rateLimitFailure ? 1 : MAX_SAME_MODEL_RETRIES;
+          if (shouldRotate && sameModelRetries < maxSameModelRetries) {
             sameModelRetries++;
             const delayMs = sameModelRetries * SAME_MODEL_RETRY_DELAY_MS;
             log.warn(
-              `retrying same model ${provider}/${modelId} in ${delayMs}ms before failover (attempt ${sameModelRetries}/${MAX_SAME_MODEL_RETRIES})`,
+              `retrying same model ${provider}/${modelId} in ${delayMs}ms before failover (attempt ${sameModelRetries}/${maxSameModelRetries})`,
             );
             await sleep(delayMs);
             continue;
