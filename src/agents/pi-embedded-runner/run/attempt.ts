@@ -3068,6 +3068,58 @@ export async function runEmbeddedAttempt(
           messages: activeSession.messages,
         });
 
+        // tmpfix: retry dedup — rewind session past duplicate user + failed assistant
+        // entries from previous retry attempt(s). The retry loop in run.ts re-calls
+        // runEmbeddedAttempt which calls activeSession.prompt(), re-appending the same
+        // user message each time. Branch past those dead entries so the model sees each
+        // user message exactly once. Dead entries stay in the JSONL (tree branching, not
+        // deletion) and are excluded from buildSessionContext().
+        //
+        // Two modes:
+        // - Empty error assistant (e.g. 429): strip both entries, re-prompt cleanly.
+        // - Non-empty error assistant (partial output before failure): keep entries
+        //   intact (model may have already streamed content to the channel) and mark
+        //   the next prompt as re-delivery so the model knows it's a retry.
+        let retryRedelivery = false;
+        if (params.isRetry) {
+          let stripped = 0;
+          for (;;) {
+            const leaf = sessionManager.getLeafEntry();
+            if (!leaf || leaf.type !== "message") { break; }
+            const msg = leaf.message;
+            const isEmptyFailedAssistant =
+              msg.role === "assistant" &&
+              msg.stopReason === "error" &&
+              (!msg.content || msg.content.length === 0);
+            const isDuplicateUser =
+              msg.role === "user" &&
+              Array.isArray(msg.content) &&
+              msg.content.some(
+                (c: any) => c.type === "text" && typeof c.text === "string" && c.text.includes(params.prompt),
+              );
+            if (!isEmptyFailedAssistant && !isDuplicateUser) {
+              if (msg.role === "assistant" && msg.stopReason === "error") {
+                retryRedelivery = true;
+              }
+              break;
+            }
+            if (leaf.parentId) {
+              sessionManager.branch(leaf.parentId);
+            } else {
+              sessionManager.resetLeaf();
+            }
+            stripped++;
+          }
+          if (stripped > 0) {
+            const sessionContext = sessionManager.buildSessionContext();
+            activeSession.agent.replaceMessages(sessionContext.messages);
+            log.warn(
+              `retry dedup: stripped ${stripped} orphaned entries from previous failed attempt(s). ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+          }
+        }
+
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
@@ -3169,6 +3221,22 @@ export async function runEmbeddedAttempt(
             messages: btwSnapshotMessages,
             inFlightPrompt: effectivePrompt,
           });
+
+          // tmpfix: retry dedup — mark re-delivered prompts when the previous
+          // attempt's assistant had partial content (non-empty error). The model
+          // can see its own partial output in history and knows this is a retry.
+          if (retryRedelivery) {
+            effectivePrompt =
+              "[re-delivery: your previous response was interrupted due to an error. " +
+              "this is the same user message as the one before your interrupted response, " +
+              "re-delivered for you to respond again. " +
+              "do not treat it as a new or repeated message.]\n" +
+              effectivePrompt;
+            log.warn(
+              `retry dedup: marking prompt as re-delivery (previous attempt had partial output). ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+          }
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
