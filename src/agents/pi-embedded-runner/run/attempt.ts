@@ -3101,7 +3101,9 @@ export async function runEmbeddedAttempt(
               ((msg as any).stopReason === "error" || (msg as any).stopReason === "aborted");
             const isEmptyFailedAssistant =
               isFailedStop &&
-              (!msg.content || msg.content.length === 0);
+              (!msg.content ||
+                msg.content.length === 0 ||
+                msg.content.every((c: any) => c.type === "thinking"));
             const isDuplicateUser =
               msg.role === "user" &&
               Array.isArray(msg.content) &&
