@@ -11,6 +11,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { sleep } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -1532,6 +1533,17 @@ export async function runEmbeddedPiAgent(
           // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+
+          if (shouldRotate && timedOut && isSubagentSessionKey(params.sessionKey)) {
+            log.warn(
+              `subagent timeout: stopping retry loop for session=${params.sessionKey} ` +
+                `runId=${params.runId}`,
+            );
+            return {
+              payloads: [{ text: "subagent timed out", isError: true }],
+              meta: { durationMs: Date.now() - started, aborted },
+            };
+          }
 
           const maxSameModelRetries = rateLimitFailure ? 1 : MAX_SAME_MODEL_RETRIES;
           if (shouldRotate && sameModelRetries < maxSameModelRetries) {
