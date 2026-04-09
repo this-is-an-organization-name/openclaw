@@ -2,6 +2,9 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { setAbortMemory } from "./abort-primitives.js";
 
+export const ABORTED_LAST_RUN_HINT =
+  "Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification.";
+
 export async function applySessionHints(params: {
   baseBody: string;
   abortedLastRun: boolean;
@@ -12,9 +15,7 @@ export async function applySessionHints(params: {
   abortKey?: string;
 }): Promise<string> {
   let prefixedBodyBase = params.baseBody;
-  const abortedHint = params.abortedLastRun
-    ? "Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification."
-    : "";
+  const abortedHint = params.abortedLastRun ? ABORTED_LAST_RUN_HINT : "";
   if (abortedHint) {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
     if (params.sessionEntry && params.sessionStore && params.sessionKey) {

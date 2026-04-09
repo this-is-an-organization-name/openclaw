@@ -12,6 +12,7 @@ import {
   resolveTelegramReactionLevel,
 } from "../../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { ABORTED_LAST_RUN_HINT } from "../../../auto-reply/reply/body.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -3111,7 +3112,7 @@ export async function runEmbeddedAttempt(
                 (c: any) => c.type === "text" && typeof c.text === "string" && c.text.includes(params.prompt),
               );
             if (!isEmptyFailedAssistant && !isDuplicateUser) {
-              if (isFailedStop) {
+              if (isFailedStop || msg.role === "toolResult") {
                 retryRedelivery = true;
               }
               break;
@@ -3239,11 +3240,16 @@ export async function runEmbeddedAttempt(
           // attempt's assistant had partial content (non-empty error). The model
           // can see its own partial output in history and knows this is a retry.
           if (retryRedelivery) {
+            if (effectivePrompt.startsWith(ABORTED_LAST_RUN_HINT)) {
+              effectivePrompt = effectivePrompt.slice(ABORTED_LAST_RUN_HINT.length).trimStart();
+            }
             effectivePrompt =
-              "[re-delivery: your previous response was interrupted due to an error. " +
-              "this is the same user message as the one before your interrupted response, " +
-              "re-delivered for you to respond again. " +
-              "do not treat it as a new or repeated message.]\n" +
+              "[re-delivery: previous response attempt interrupted by a system-level issue " +
+              "unrelated to the user or conversation. same user message re-sent. " +
+              "partial output or tool interactions from the interrupted attempt may still appear " +
+              "above — they may be correct or incomplete/anomalous; use your judgment on what " +
+              "to keep or redo. respond to the original request normally. " +
+              "do not mention the interruption to the user.]\n" +
               effectivePrompt;
             log.warn(
               `retry dedup: marking prompt as re-delivery (previous attempt had partial output). ` +
