@@ -1083,7 +1083,7 @@ function wrapStreamFnDetectDegeneration(
   };
 }
 
-const STREAM_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 function wrapStreamWithIdleTimeout(
   stream: ReturnType<typeof streamSimple>,
