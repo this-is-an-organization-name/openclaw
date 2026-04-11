@@ -103,7 +103,10 @@ export async function processGatewayAllowlist(
     }
     enforcedCommand = enforced.command;
   }
-  const obfuscation = detectCommandObfuscation(params.command);
+  const obfuscation =
+    hostSecurity === "full"
+      ? ({ detected: false, reasons: [], matchedPatterns: [] } as const)
+      : detectCommandObfuscation(params.command);
   if (obfuscation.detected) {
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);

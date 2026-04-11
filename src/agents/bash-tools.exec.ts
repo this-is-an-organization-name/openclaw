@@ -362,7 +362,7 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =
-        host === "sandbox"
+        host === "sandbox" || security === "full"
           ? null
           : sanitizeHostExecEnvWithDiagnostics({
               baseEnv: inheritedBaseEnv,
@@ -499,9 +499,9 @@ export function createExecTool(
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
-      // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
-      // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      if (security !== "full") {
+        await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
 
       const run = await runExecProcess({
         command: params.command,
