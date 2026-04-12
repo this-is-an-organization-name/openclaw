@@ -1,14 +1,15 @@
 // tmpfix: pre-reset memory flush & /save command (ref: PR#18883)
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { appendCronStyleCurrentTimeLine, resolveCronStyleNow } from "../../agents/current-time.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isEmbeddedPiRunActive, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
-import { resolveMemoryFlushPromptForRun, resolveMemoryFlushSettings } from "./memory-flush.js";
 
 const SAVE_PROMPT = [
   "Manual memory save requested by user.",
@@ -59,13 +60,23 @@ export async function runMemorySave(params: {
     return { ok: false, error: "agent is currently running" };
   }
 
-  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
-  const prompt = resolveMemoryFlushPromptForRun({
-    prompt: params.prompt ?? memoryFlushSettings?.prompt ?? SAVE_PROMPT,
-    cfg: params.cfg,
-  });
+  const plan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const rawPrompt = params.prompt ?? SAVE_PROMPT;
+  let prompt: string;
+  if (!params.prompt && plan) {
+    prompt = plan.prompt;
+  } else {
+    const dateStamp = plan
+      ? plan.relativePath.replace(/^memory\//, "").replace(/\.md$/, "")
+      : formatFallbackDateStamp(params.cfg);
+    prompt = appendCronStyleCurrentTimeLine(
+      rawPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+      params.cfg ?? {},
+      Date.now(),
+    );
+  }
   const systemPrompt =
-    params.systemPrompt ?? memoryFlushSettings?.systemPrompt ?? SAVE_SYSTEM_PROMPT;
+    params.systemPrompt ?? plan?.systemPrompt ?? SAVE_SYSTEM_PROMPT;
 
   const runId = crypto.randomUUID();
   registerAgentRunContext(runId, {
@@ -180,3 +191,19 @@ export const handleSaveCommand: CommandHandler = async (params) => {
     reply: { text: "💾 Memory saved." },
   };
 };
+
+function formatFallbackDateStamp(cfg?: HandleCommandsParams["cfg"]): string {
+  const nowMs = Date.now();
+  const { userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: userTimezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find(p => p.type === "year")?.value;
+  const month = parts.find(p => p.type === "month")?.value;
+  const day = parts.find(p => p.type === "day")?.value;
+  if (year && month && day) { return `${year}-${month}-${day}`; }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}

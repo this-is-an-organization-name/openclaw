@@ -1,7 +1,13 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
+import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
+import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
+import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
@@ -11,9 +17,11 @@ function resolveKilocodeAppHeaders(): Record<string, string> {
   return { [KILOCODE_FEATURE_HEADER]: feature };
 }
 
+// tmpfix: cacheStyle needs provider-level OpenRouter-Anthropic detection
 export function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
   return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
+
 
 function mapThinkingLevelToOpenRouterReasoningEffort(
   thinkingLevel: ThinkLevel,
@@ -99,17 +107,34 @@ export function createSystemCacheControlWrapper(baseStreamFn: StreamFn | undefin
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const provider = readStringValue(model.provider);
+    const modelId = readStringValue(model.id);
+    // Keep OpenRouter-specific cache markers on verified OpenRouter routes
+    // (or the provider's default route), but not on arbitrary OpenAI proxies.
+    const endpointClass = resolveProviderRequestPolicy({
+      provider,
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+    }).endpointClass;
     if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !modelId ||
+      !isAnthropicModelRef(modelId) ||
+      !(
+        endpointClass === "openrouter" ||
+        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
+      )
     ) {
       return underlying(model, context, options);
     }
-    return createSystemCacheControlWrapper(underlying)(model, context, options);
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      applyAnthropicEphemeralCacheControlMarkers(payloadObj);
+    });
   };
 }
 
+// tmpfix: cacheStyle — apply conversation-level cache_control to last user/assistant turn
 export function createConversationCacheControlWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -142,24 +167,32 @@ export function createOpenRouterWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    const attributionHeaders = resolveProviderAttributionHeaders("openrouter");
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...attributionHeaders,
-        ...options?.headers,
+    const headers = resolveProviderRequestPolicyConfig({
+      provider: readStringValue(model.provider) ?? "openrouter",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      precedence: "caller-wins",
+    }).headers;
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      {
+        ...options,
+        headers,
       },
-      onPayload: (payload) => {
+      (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, model);
       },
-    });
+    );
   };
 }
 
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith("x-ai/");
+  return isProxyReasoningUnsupportedModelHint(modelId);
 }
 
 export function createKilocodeWrapper(
@@ -168,17 +201,27 @@ export function createKilocodeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...options?.headers,
-        ...resolveKilocodeAppHeaders(),
+    const headers = resolveProviderRequestPolicyConfig({
+      provider: readStringValue(model.provider) ?? "kilocode",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      providerHeaders: resolveKilocodeAppHeaders(),
+      precedence: "defaults-win",
+    }).headers;
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      {
+        ...options,
+        headers,
       },
-      onPayload: (payload) => {
+      (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, model);
       },
-    });
+    );
   };
 }

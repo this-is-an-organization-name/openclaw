@@ -1,13 +1,32 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { buildMemoryPromptSection } from "../memory/prompt-section.js";
+import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import type {
+  EmbeddedFullAccessBlockedReason,
+  EmbeddedSandboxInfo,
+} from "./pi-embedded-runner/types.js";
+import {
+  normalizePromptCapabilityIds,
+  normalizeStructuredPromptSection,
+} from "./prompt-cache-stability.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
+import type {
+  ProviderSystemPromptContribution,
+  ProviderSystemPromptSectionId,
+} from "./system-prompt-contribution.js";
+import type { PromptMode } from "./system-prompt.types.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -15,8 +34,119 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
  * - "none": Just basic identity line, no sections
  */
-export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
+
+const CONTEXT_FILE_ORDER = new Map<string, number>([
+  ["agents.md", 10],
+  ["soul.md", 20],
+  ["identity.md", 30],
+  ["user.md", 40],
+  ["tools.md", 50],
+  ["bootstrap.md", 60],
+  ["memory.md", 70],
+]);
+
+const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
+  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+function normalizeContextFilePath(pathValue: string): string {
+  return pathValue.trim().replace(/\\/g, "/");
+}
+
+function getContextFileBasename(pathValue: string): string {
+  const normalizedPath = normalizeContextFilePath(pathValue);
+  return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
+}
+
+function isDynamicContextFile(pathValue: string): boolean {
+  return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function sanitizeContextFileContentForPrompt(content: string): string {
+  // Claude Code subscription mode rejects this exact prompt-policy quote when it
+  // appears in system context. The live heartbeat user turn still carries the
+  // actual instruction, and the generated heartbeat section below covers behavior.
+  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
+}
+
+function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
+  return contextFiles.toSorted((a, b) => {
+    const aPath = normalizeContextFilePath(a.path);
+    const bPath = normalizeContextFilePath(b.path);
+    const aBase = getContextFileBasename(a.path);
+    const bBase = getContextFileBasename(b.path);
+    const aOrder = CONTEXT_FILE_ORDER.get(aBase) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = CONTEXT_FILE_ORDER.get(bBase) ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    if (aBase !== bBase) {
+      return aBase.localeCompare(bBase);
+    }
+    return aPath.localeCompare(bPath);
+  });
+}
+
+function buildProjectContextSection(params: {
+  files: EmbeddedContextFile[];
+  heading: string;
+  dynamic: boolean;
+}) {
+  if (params.files.length === 0) {
+    return [];
+  }
+  const lines = [params.heading, ""];
+  if (params.dynamic) {
+    lines.push(
+      "以下频繁变化的项目上下文文件尽可能位于缓存边界之下：",
+      "",
+    );
+  } else {
+    const hasSoulFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "soul.md",
+    );
+    lines.push("以下项目上下文文件已加载：");
+    if (hasSoulFile) {
+      lines.push(
+        "如果存在 SOUL.md：SOUL.md 定义此系统的完整行为规则——按其中规则书写输出内容和执行行动，并应用其中的人设和语调。",
+      );
+    }
+    lines.push("");
+  }
+  for (const file of params.files) {
+    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+  }
+  return lines;
+}
+
+function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
+  if (params.isMinimal || !params.heartbeatPrompt) {
+    return [];
+  }
+  return [
+    "## 心跳",
+    "当接收到心跳轮询且此时并没有需要特别关注的事项，请极其精确地仅输出：",
+    "HEARTBEAT_OK",
+    '假如有需要关注/告警的事项，切勿包含 "HEARTBEAT_OK"；应直接输出告警文本。',
+    "",
+  ];
+}
+
+function buildExecApprovalPromptGuidance(params: {
+  runtimeChannel?: string;
+  inlineButtonsEnabled?: boolean;
+}) {
+  const runtimeChannel = normalizeOptionalLowercaseString(params.runtimeChannel);
+  const usesNativeApprovalUi =
+    params.inlineButtonsEnabled ||
+    (runtimeChannel
+      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
+      : false);
+  if (usesNativeApprovalUi) {
+    return "当 exec 返回 approval-pending 时，依赖此频道的原生审批卡片/按钮，不要同时发送纯文本 /approve 指令。仅当工具返回结果表明聊天审批不可用或只能手动审批时，才包含具体的 /approve 命令。";
+  }
+  return "当 exec 返回 approval-pending 时，将工具输出中的具体 /approve 命令作为纯文本发送给用户，不要要求不同的或轮换的代码。";
+}
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
@@ -38,10 +168,11 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
 
 function buildMemorySection(params: {
   isMinimal: boolean;
+  includeMemorySection?: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }) {
-  if (params.isMinimal) {
+  if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
   return buildMemoryPromptSection({
@@ -88,20 +219,81 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## 当前日期与时间", `时区：${params.userTimezone}`, ""];
 }
 
-function buildReplyTagsSection(isMinimal: boolean) {
+function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   if (isMinimal) {
     return [];
   }
   return [
-    "## 回复标签",
-    "要在支持的平台上请求原生回复/引用，在你的输出内容中包含一个标签：",
-    "- 回复标签必须是消息的第一个 token（前面不能有文本/换行）：[[reply_to_current]] 你的输出内容。",
+    "## 助手输出指令",
+    "在助手消息中需要传递元数据时使用以下指令：",
+    "- `MEDIA:<path-or-url>` 单独一行请求附件投递。Web UI 会剥离支持的 MEDIA 行并内联渲染；频道仍决定实际投递行为。",
+    "- `[[audio_as_voice]]` 将附带的音频标记为语音消息风格投递提示。Web UI 在有音频时可能显示语音消息标识；频道仍拥有投递语义。",
+    "- 要在支持的平台上请求原生回复/引用，在你的回复中包含一个回复标签：",
+    "- 回复标签必须是消息的第一个 token（前面不能有文本/换行）：[[reply_to_current]] 你的回复。",
     "- [[reply_to_current]] 回复触发消息。",
-    "- 优先使用 [[reply_to_current]]。仅当 id 被明确提供时（例如由上游指令或工具提供）才使用 [[reply_to:<id>]]。",
+    "- 优先使用 [[reply_to_current]]。仅当 id 被明确提供时（例如由用户或工具提供）才使用 [[reply_to:<id>]]。",
     "标签内允许空格（例如 [[ reply_to_current ]] / [[ reply_to: 123 ]]）。",
-    "标签在发送前会被剥离；支持情况取决于当前频道配置。",
+    "- 频道特有的交互指令是独立的，不应混入此 Web 渲染指引。",
+    "支持的标签在用户可见的渲染前会被剥离；支持情况取决于当前频道配置。",
     "",
   ];
+}
+
+function buildWebchatCanvasSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+  canvasRootDir?: string;
+}) {
+  if (params.isMinimal || params.runtimeChannel !== "webchat") {
+    return [];
+  }
+  return [
+    "## Control UI Embed",
+    "仅在 Control UI/webchat 会话中使用 `[embed ...]` 以在助手气泡内进行内联富渲染。",
+    "- 非 Web 频道不要使用 `[embed ...]`。",
+    "- `[embed ...]` 与 `MEDIA:` 是分开的。用 `MEDIA:` 发送附件；用 `[embed ...]` 进行仅限 Web 的富渲染。",
+    '- 对托管 embed 文档使用自闭合形式：`[embed ref="cv_123" title="Status" height="320" /]`。',
+    '- 也可以使用显式托管 URL：`[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`。',
+    '- 绝不要在 `[embed ...]` 中使用本地文件系统路径或 `file://...` URL。托管 embed 必须指向 `/__openclaw__/canvas/...` URL 或使用 `ref="..."`。',
+    params.canvasRootDir
+      ? `- 本会话的活动托管 embed 根目录为：\`${sanitizeForPromptLiteral(params.canvasRootDir)}\`。如果手动暂存托管 embed 文件，请写入该目录，而非工作区。`
+      : "- 活动托管 embed 根目录按配置文件范围确定，而非工作区范围。如果手动暂存托管 embed 文件，请写入活动配置文件的 embed 根目录下，而非工作区。",
+    '- 引用所有属性值。优先使用 `ref` 引用托管文档，除非已知完整的 `/__openclaw__/canvas/documents/<id>/index.html` URL。',
+    "",
+  ];
+}
+
+function buildExecutionBiasSection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return [
+    "## 执行倾向",
+    "如果对方要求你做某件事，在同一轮中开始执行。",
+    "当任务可执行时，首先使用真实工具调用或具体行动；不要止步于计划或承诺。",
+    "当工具可用且下一步行动明确时，仅发表评论的轮次是不完整的。",
+    "如果工作需要多个步骤或较长时间，在执行前或执行中发送一条简短的进度更新。",
+    "",
+  ];
+}
+
+function normalizeProviderPromptBlock(value?: string): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeStructuredPromptSection(value);
+  return normalized || undefined;
+}
+
+function buildOverridablePromptSection(params: {
+  override?: string;
+  fallback: string[];
+}): string[] {
+  const override = normalizeProviderPromptBlock(params.override);
+  if (override) {
+    return [override, ""];
+  }
+  return params.fallback;
 }
 
 function buildMessagingSection(params: {
@@ -168,13 +360,25 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "如果存在 `~/source/openclaw`，优先研究这里的源码和文档，这是当前正在运行的代码分支。",
     "⚠️ 警告：极度谨慎甚至避免自行调整 OpenClaw 自身代码，容易导致系统崩溃、无法启动且无法自行恢复。",
     "社区：https://discord.com/invite/clawd",
-    "查找新技能：https://clawhub.com",
+    "查找新技能：https://clawhub.ai",
     "关于 OpenClaw 的行为、命令、配置或架构：先查阅本地文档。",
     "诊断 OpenClaw 的问题时，尽可能自己运行 `openclaw status` 或相关检查命令查明原因；仅在缺乏访问权限或确实无法判定根因时，才向对方求助。",
     "",
   ];
 }
 
+function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason): string {
+  if (reason === "host-policy") {
+    return "host policy";
+  }
+  if (reason === "channel") {
+    return "channel constraints";
+  }
+  if (reason === "sandbox") {
+    return "sandbox constraints";
+  }
+  return "runtime constraints";
+}
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -212,6 +416,7 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
+    canvasRootDir?: string;
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -220,7 +425,9 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -332,6 +539,17 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const promptContribution = params.promptContribution;
+  const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
+  const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
+  const providerSectionOverrides = Object.fromEntries(
+    Object.entries(promptContribution?.sectionOverrides ?? {})
+      .map(([key, value]) => [
+        key,
+        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
+      ])
+      .filter(([, value]) => Boolean(value)),
+  ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
     params.ownerNumbers ?? [],
@@ -360,15 +578,12 @@ export function buildAgentSystemPrompt(params: {
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
-  const heartbeatPromptLine = heartbeatPrompt
-    ? `Heartbeat prompt: ${heartbeatPrompt}`
-    : "Heartbeat prompt: (configured)";
   const runtimeInfo = params.runtimeInfo;
-  const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
-  const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
-    .map((cap) => String(cap).trim())
-    .filter(Boolean);
-  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
+  const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
+  const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities.map((cap) => normalizeLowercaseStringOrEmpty(cap)).filter(Boolean),
+  );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
@@ -378,6 +593,11 @@ export function buildAgentSystemPrompt(params: {
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
     : "";
+  const elevated = params.sandboxInfo?.elevated;
+  const fullAccessBlockedReasonLabel =
+    elevated?.fullAccessAvailable === false
+      ? formatFullAccessBlockedReason(elevated.fullAccessBlockedReason)
+      : undefined;
   const displayWorkspaceDir =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
@@ -393,6 +613,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const memorySection = buildMemorySection({
     isMinimal,
+    includeMemorySection: params.includeMemorySection,
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
@@ -457,7 +678,7 @@ export function buildAgentSystemPrompt(params: {
     "如果任务更复杂或耗时更长，启动一个子代理。完成是推送式的：完成后会自动通知。",
     ...(acpHarnessSpawnAllowed
       ? [
-          '对于类似“在 codex/claude code/gemini 中执行此操作”的请求，将其视为 ACP 工具意图并调用 `sessions_spawn`，设置 `runtime: "acp"`。',
+          '对于类似“在 codex/claude code/cursor/gemini 中执行此操作”的请求，将其视为 ACP 工具意图并调用 `sessions_spawn`，设置 `runtime: "acp"`。',
           '在 Discord 上，ACP 工具请求默认为绑定线程的持久会话（`thread: true`, `mode: "session"`），除非指定。',
           "除非配置了 `acp.defaultAgent`，否则明确设置 `agentId`，不要将 ACP 工具请求通过 `subagents`/`agents_list` 或本地 PTY exec 流程路由。",
           '对于 ACP 工具线程 spawn，不要调用 `message`（`action=thread-create`）；使用 `sessions_spawn`（`runtime: "acp"`, `thread: true`）作为唯一的线程创建路径。',
@@ -465,15 +686,36 @@ export function buildAgentSystemPrompt(params: {
       : []),
     "不要循环轮询 `subagents list` / `sessions_list`；仅在按需时检查状态（用于干预、调试或明确要求时）。",
     "",
-    "## 工具调用风格",
-    "常规、低风险的工具调用直接执行，不需要说明。",
-    "多步骤工作、复杂问题、敏感操作（如删除）或明确被要求时，简要说明意图。",
-    "说明保持简洁且信息密度高；不重复显而易见的步骤。可以陈述事实或列出选项，但不要宣告动作。",
-    "当存在专用工具时，直接使用该工具，而不是要求对方运行等效的 CLI 或斜杠命令。",
-    "当 exec 返回 approval-pending 时，需直接提供工具输出中的具体 /approve 命令（包括 allow-once|allow-always|deny），绝不可索要其他不同的或轮换的审批验证码（code）。",
-    "将 allow-once 视为明确针对且仅限单个命令的使用：如果后续另一个提权命令需要审批，须请求获取新的 /approve，绝不可声称先前的审批已经包含了该命令。",
-    "需要审批时，保留并显示完整的命令/脚本（包括链接操作符如 &&、||、|、; 或多行 shell），以便授权方可以精确核对实际将运行的内容。",
-    "",
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.interaction_style,
+      fallback: [],
+    }),
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.tool_call_style,
+      fallback: [
+        "## 工具调用风格",
+        "常规、低风险的工具调用直接执行，不需要说明。",
+        "多步骤工作、复杂问题、敏感操作（如删除）或明确被要求时，简要说明意图。",
+        "说明保持简洁且信息密度高；不重复显而易见的步骤。",
+        "当存在专用工具时，直接使用该工具，而不是要求对方运行等效的 CLI 或斜杠命令。",
+        buildExecApprovalPromptGuidance({
+          runtimeChannel: params.runtimeInfo?.channel,
+          inlineButtonsEnabled,
+        }),
+        "绝不可通过 exec 或任何 shell/tool 路径执行 /approve；/approve 是面向用户的审批命令，不是 shell 命令。",
+        "将 allow-once 视为明确针对且仅限单个命令的使用：如果后续另一个提权命令需要审批，须请求获取新的 /approve，绝不可声称先前的审批已经包含了该命令。",
+        "需要审批时，保留并显示完整的命令/脚本（包括链接操作符如 &&、||、|、; 或多行 shell），以便授权方可以精确核对实际将运行的内容。",
+        "",
+      ],
+    }),
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.execution_bias,
+      fallback: buildExecutionBiasSection({ isMinimal }),
+    }),
+    ...buildOverridablePromptSection({
+      override: providerStablePrefix,
+      fallback: [],
+    }),
     ...safetySection,
     "## OpenClaw CLI 快速参考",
     "OpenClaw 通过子命令控制。不要编造命令。",
@@ -540,23 +782,40 @@ export function buildAgentSystemPrompt(params: {
               }`
             : "",
           params.sandboxInfo.browserBridgeUrl ? "沙箱浏览器：已启用。" : "",
-          params.sandboxInfo.browserNoVncUrl
-            ? `沙箱浏览器观察器（noVNC）：${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
-            : "",
           params.sandboxInfo.hostBrowserAllowed === true
             ? "主机浏览器控制：已允许。"
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "主机浏览器控制：已阻止。"
               : "",
-          params.sandboxInfo.elevated?.allowed ? "本会话可使用提权 exec。" : "",
-          params.sandboxInfo.elevated?.allowed
+          elevated?.allowed
+            ? "本会话可使用提权 exec。"
+            : elevated
+              ? "本会话不可使用提权 exec。"
+              : "",
+          elevated?.allowed && elevated.fullAccessAvailable
             ? "当前环境可通过 /elevated on|off|ask|full 切换。"
             : "",
-          params.sandboxInfo.elevated?.allowed
+          elevated?.allowed && !elevated.fullAccessAvailable
+            ? "当前环境可通过 /elevated on|off|ask 切换。"
+            : "",
+          elevated?.allowed && elevated.fullAccessAvailable
             ? "你也可以在需要时发送 /elevated on|off|ask|full。"
             : "",
-          params.sandboxInfo.elevated?.allowed
-            ? `当前提权级别：${params.sandboxInfo.elevated.defaultLevel}（ask 在主机上执行 exec 需审批；full 自动审批）。`
+          elevated?.allowed && !elevated.fullAccessAvailable
+            ? "你也可以在需要时发送 /elevated on|off|ask。"
+            : "",
+          elevated?.fullAccessAvailable === false
+            ? `自动审批 /elevated full 在此环境不可用（${fullAccessBlockedReasonLabel}）。`
+            : "",
+          elevated?.allowed && elevated.fullAccessAvailable
+            ? `当前提权级别：${elevated.defaultLevel}（ask 在主机上执行 exec 需审批；full 自动审批）。`
+            : elevated?.allowed
+              ? `当前提权级别：${elevated.defaultLevel}（full 自动审批在此环境不可用；请使用 ask/on）。`
+              : elevated
+                ? "当前提权级别：off（提权 exec 不可用）。"
+                : "",
+          elevated && !elevated.allowed
+            ? "不要告知用户在本会话中切换到 /elevated full。"
             : "",
         ]
           .filter(Boolean)
@@ -570,7 +829,12 @@ export function buildAgentSystemPrompt(params: {
     "## 工作区文件（注入）",
     "这些外置的环境配置文件由 OpenClaw 加载，并包含在下方的项目上下文中。",
     "",
-    ...buildReplyTagsSection(isMinimal),
+    ...buildAssistantOutputDirectivesSection(isMinimal),
+    ...buildWebchatCanvasSection({
+      isMinimal,
+      runtimeChannel,
+      canvasRootDir: params.runtimeInfo?.canvasRootDir,
+    }),
     ...buildMessagingSection({
       isMinimal,
       availableTools,
@@ -582,11 +846,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader = promptMode === "minimal" ? "## 子代理上下文" : "## 群聊上下文";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -618,27 +877,16 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0) {
-    lines.push("# 项目上下文", "");
-    if (validContextFiles.length > 0) {
-      const hasSoulFile = validContextFiles.some((file) => {
-        const normalizedPath = file.path.trim().replace(/\\/g, "/");
-        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-        return baseName.toLowerCase() === "soul.md";
-      });
-      lines.push("以下项目上下文文件已加载：");
-      if (hasSoulFile) {
-        lines.push(
-          "如果存在 SOUL.md：SOUL.md 定义此系统的完整行为规则——按其中规则书写输出内容和执行行动，并应用其中的人设和语调。",
-        );
-      }
-      lines.push("");
-    }
-
-    for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
-    }
-  }
+  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
+  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
+  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  lines.push(
+    ...buildProjectContextSection({
+      files: stableContextFiles,
+      heading: "# 项目上下文",
+      dynamic: false,
+    }),
+  );
 
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {
@@ -658,18 +906,26 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
-    lines.push(
-      "## 心跳",
-      heartbeatPromptLine,
-      "当接收到心跳轮询（指的是一条与上述心跳提示词匹配的后台信号），且此时并没有需要特别关注的事项，请极其精确地仅输出：",
-      "HEARTBEAT_OK",
-      'OpenClaw 将提取输出内容开头/结尾的 "HEARTBEAT_OK" 作为心跳确认（并在内部将其丢弃）。',
-      '假如有需要关注/告警的事项，切勿包含 "HEARTBEAT_OK"；应直接输出告警文本。',
-      "",
-    );
+  lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  lines.push(
+    ...buildProjectContextSection({
+      files: dynamicContextFiles,
+      heading: stableContextFiles.length > 0 ? "# 动态项目上下文" : "# 项目上下文",
+      dynamic: true,
+    }),
+  );
+
+  if (extraSystemPrompt) {
+    const contextHeader =
+      promptMode === "minimal" ? "## 子代理上下文" : "## 群聊上下文";
+    lines.push(contextHeader, extraSystemPrompt, "");
   }
+  if (providerDynamicSuffix) {
+    lines.push(providerDynamicSuffix, "");
+  }
+
+  lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
     "## 运行时",
@@ -696,6 +952,7 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
+  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   return `运行时：${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
@@ -711,7 +968,11 @@ export function buildRuntimeLine(
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel
-      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
+      ? `capabilities=${
+          normalizedRuntimeCapabilities.length > 0
+            ? normalizedRuntimeCapabilities.join(",")
+            : "none"
+        }`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
   ]
