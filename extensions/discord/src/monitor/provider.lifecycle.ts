@@ -392,7 +392,6 @@ export async function runDiscordGatewayLifecycle(params: {
   const CONNECTED_PROBE_INTERVAL_MS = 5_000;
   const connectedProbeId = setInterval(() => {
     if (gateway?.isConnected && !lifecycleStopping) {
-      reconnectStallWatchdog.disarm();
       pushStatus({ connected: true, lastEventAt: Date.now() });
     }
   }, CONNECTED_PROBE_INTERVAL_MS);
