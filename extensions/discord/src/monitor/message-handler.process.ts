@@ -289,7 +289,7 @@ export async function processDiscordMessage(
     allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     isGuild: isGuildMessage,
     channelTopic: channelInfo?.topic,
-    messageBody: text,
+    // messageBody: text, // tmpfix: see inbound-context.ts
   });
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,

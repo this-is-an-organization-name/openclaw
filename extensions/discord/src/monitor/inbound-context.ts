@@ -1,6 +1,6 @@
 import {
   buildUntrustedChannelMetadata,
-  wrapExternalContent,
+  // wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveDiscordMemberAllowed,
@@ -50,7 +50,7 @@ export function buildDiscordGroupSystemPrompt(
 export function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
   channelTopic?: string;
-  messageBody?: string;
+  // messageBody?: string;
 }): string[] | undefined {
   if (!params.isGuild) {
     return undefined;
@@ -61,12 +61,13 @@ export function buildDiscordUntrustedContext(params: {
       label: "Discord channel topic",
       entries: [params.channelTopic],
     }),
-    typeof params.messageBody === "string" && params.messageBody.trim().length > 0
-      ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
-          source: "unknown",
-          includeWarning: false,
-        })
-      : undefined,
+    // tmpfix: upstream a94ec3b79b duplicates user message body into UntrustedContext
+    // typeof params.messageBody === "string" && params.messageBody.trim().length > 0
+    //   ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
+    //       source: "unknown",
+    //       includeWarning: false,
+    //     })
+    //   : undefined,
   ].filter((entry): entry is string => Boolean(entry));
   return entries.length > 0 ? entries : undefined;
 }
@@ -82,7 +83,7 @@ export function buildDiscordInboundAccessContext(params: {
   allowNameMatching?: boolean;
   isGuild: boolean;
   channelTopic?: string;
-  messageBody?: string;
+  // messageBody?: string;
 }) {
   return {
     groupSystemPrompt: params.isGuild
@@ -91,7 +92,7 @@ export function buildDiscordInboundAccessContext(params: {
     untrustedContext: buildDiscordUntrustedContext({
       isGuild: params.isGuild,
       channelTopic: params.channelTopic,
-      messageBody: params.messageBody,
+      // messageBody: params.messageBody,
     }),
     ownerAllowFrom: resolveDiscordOwnerAllowFrom({
       channelConfig: params.channelConfig,
