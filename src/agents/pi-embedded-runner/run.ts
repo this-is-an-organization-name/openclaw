@@ -1448,7 +1448,7 @@ export async function runEmbeddedPiAgent(
           }
 
           // tmpfix: sameModelRetries — retry same model before failover rotation
-          if (assistantFailoverDecision.action !== "continue_normal" && !noFailover) {
+          if (assistantFailoverDecision.action !== "continue_normal" && !noFailover && !aborted) {
             const maxSameModelRetries = rateLimitFailure ? 1 : MAX_SAME_MODEL_RETRIES;
             if (sameModelRetries < maxSameModelRetries) {
               sameModelRetries++;
