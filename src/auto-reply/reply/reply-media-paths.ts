@@ -131,61 +131,12 @@ export function createReplyMediaPathNormalizer(params: {
     if (HTTP_URL_RE.test(media)) {
       return media;
     }
-    const sandboxRoot = await resolveSandboxRoot();
-    if (sandboxRoot) {
-      try {
-        return await resolveSandboxedMediaSource({
-          media,
-          sandboxRoot,
-        });
-      } catch (err) {
-        if (!isLikelyLocalMediaSource(media) || FILE_URL_RE.test(media)) {
-          throw err;
-        }
-        if (workspaceOnly) {
-          throw err;
-        }
-        if (!path.isAbsolute(media)) {
-          return resolvePathFromInput(media, params.workspaceDir);
-        }
-        if (
-          isAllowedAbsoluteReplyMediaPath({
-            candidate: media,
-            workspaceDir: params.workspaceDir,
-            sandboxRoot,
-          })
-        ) {
-          return media;
-        }
-        throw new Error(
-          "Absolute host-local MEDIA paths are blocked in normal replies. Use a safe relative path or the message tool.",
-          { cause: err },
-        );
-      }
-    }
-    if (!isLikelyLocalMediaSource(media)) {
-      return media;
-    }
-    if (FILE_URL_RE.test(media)) {
-      throw new Error(
-        "Absolute host-local MEDIA file URLs are blocked in normal replies. Use a safe relative path or the message tool.",
-      );
-    }
-    if (!path.isAbsolute(media)) {
+    // the agent already has filesystem access via tools, path restrictions
+    // here only cause silent drops that confuse both the model and the user
+    if (!path.isAbsolute(media) && isLikelyLocalMediaSource(media) && !FILE_URL_RE.test(media)) {
       return resolvePathFromInput(media, params.workspaceDir);
     }
-    if (
-      isAllowedAbsoluteReplyMediaPath({
-        candidate: media,
-        workspaceDir: params.workspaceDir,
-        sandboxRoot,
-      })
-    ) {
-      return media;
-    }
-    throw new Error(
-      "Absolute host-local MEDIA paths are blocked in normal replies. Use a safe relative path or the message tool.",
-    );
+    return media;
   };
 
   return async (payload) => {

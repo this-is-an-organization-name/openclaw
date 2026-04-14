@@ -6,6 +6,7 @@ import {
   type RequestData,
   type RequestClientOptions,
 } from "@buape/carbon";
+import { FormData as UndiciFormData } from "undici";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 export type ProxyRequestClientOptions = RequestClientOptions & {
@@ -281,7 +282,7 @@ class ProxyRequestClientCompat {
         typeof payload === "string"
           ? { content: payload, attachments: [] }
           : { ...payload, attachments: [] };
-      const formData = new FormData();
+      const formData = new UndiciFormData();
       const files = getMultipartFiles(payload);
 
       for (const [index, file] of files.entries()) {
@@ -300,7 +301,7 @@ class ProxyRequestClientCompat {
         files: undefined,
       };
       formData.append("payload_json", JSON.stringify(cleanedBody));
-      body = formData;
+      body = formData as unknown as FormData;
     } else if (data?.body != null) {
       headers.set("Content-Type", "application/json");
       body = data.rawBody ? (data.body as BodyInit) : JSON.stringify(data.body);
