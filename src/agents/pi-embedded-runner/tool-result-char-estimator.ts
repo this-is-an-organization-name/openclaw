@@ -122,8 +122,12 @@ function estimateMessageChars(msg: AgentMessage): number {
   if (isToolResultMessage(msg)) {
     const content = getToolResultContent(msg);
     let chars = estimateContentBlockChars(content);
-    const details = (msg as { details?: unknown }).details;
-    chars += estimateUnknownChars(details);
+    // details is stripped before any LLM-facing operation (compaction,
+    // model context, replay) via stripToolResultDetails; including it
+    // here inflates the estimate and causes false-positive context
+    // overflow guards while the actual token usage is well within budget.
+    // const details = (msg as { details?: unknown }).details;
+    // chars += estimateUnknownChars(details);
     const weightedChars = Math.ceil(
       chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
     );
