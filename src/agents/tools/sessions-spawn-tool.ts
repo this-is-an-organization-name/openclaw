@@ -87,15 +87,15 @@ const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
-  agentId: Type.Optional(Type.String()),
+  agentId: Type.String(),
   resumeSessionId: Type.Optional(
     Type.String({
       description:
         'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
     }),
   ),
-  model: Type.Optional(Type.String()),
-  thinking: Type.Optional(Type.String()),
+  model: Type.String(),
+  thinking: Type.String(),
   cwd: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat: older callers used timeoutSeconds for this tool.
