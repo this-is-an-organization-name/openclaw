@@ -51,16 +51,10 @@ export function buildExecEventPrompt(
       ? `${rawEventText.slice(0, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
       : rawEventText;
   if (!eventText) {
-    return (
-      "An async command completion event was triggered, but no command output was found. " +
-      "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
-    );
+    return "An async command completion event was triggered, but no command output was found.";
   }
   if (!deliverToUser) {
-    return (
-      "An async command completion event was triggered, but user delivery is disabled for this run. " +
-      "Handle the result internally and reply HEARTBEAT_OK only. Do not mention, summarize, or reuse command output."
-    );
+    return "An async command you ran earlier has completed:\n\n" + eventText;
   }
   return (
     "An async command you ran earlier has completed. The command completion details are:\n\n" +

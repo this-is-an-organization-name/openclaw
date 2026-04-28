@@ -12,6 +12,10 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
@@ -719,7 +723,20 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  // Wrap system-generated event prompts in internal context markers so the model
+  // can distinguish them from user-authored input and handle them appropriately.
+  const wrappedBasePrompt =
+    hasExecCompletion || hasCronEvents
+      ? [
+          INTERNAL_RUNTIME_CONTEXT_BEGIN,
+          "The content within this section is system-generated, not user input.",
+          `You are not expected to respond to messages in this section.`,
+          "",
+          basePrompt,
+          INTERNAL_RUNTIME_CONTEXT_END,
+        ].join("\n")
+      : basePrompt;
+  const prompt = appendHeartbeatWorkspacePathHint(wrappedBasePrompt, params.workspaceDir);
 
   return { prompt, hasExecCompletion, hasCronEvents };
 }

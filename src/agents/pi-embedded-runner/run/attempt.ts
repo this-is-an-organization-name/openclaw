@@ -8,8 +8,8 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { ABORTED_LAST_RUN_HINT } from "../../../auto-reply/reply/body.js"; // tmpfix: retry dedup
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { ABORTED_LAST_RUN_HINT } from "../../../auto-reply/reply/body.js"; // tmpfix: retry dedup
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { emitDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -32,8 +32,8 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
-import { resolvePrependContextItems } from "../../../plugins/types.js"; // tmpfix: prependContext/appendContext
 import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { resolvePrependContextItems } from "../../../plugins/types.js"; // tmpfix: prependContext/appendContext
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -386,15 +386,20 @@ function checkDegenerationTracker(tracker: DegenerationTracker, delta: string): 
   if (tracker.buffer.length > STREAM_DEGENERATION_BUFFER_SIZE) {
     tracker.buffer = tracker.buffer.slice(-STREAM_DEGENERATION_BUFFER_SIZE);
   }
-  if (tracker.charsSinceLastCheck < STREAM_DEGENERATION_CHECK_INTERVAL) {
-    return false;
+  // Use a while loop so that a single large delta (e.g. a model that sends the entire
+  // thinking block in one chunk) can accumulate multiple confirmation ticks within the
+  // same call, instead of being limited to one tick and never reaching CONFIRM_COUNT.
+  while (tracker.charsSinceLastCheck >= STREAM_DEGENERATION_CHECK_INTERVAL) {
+    tracker.charsSinceLastCheck -= STREAM_DEGENERATION_CHECK_INTERVAL;
+    if (detectStreamDegeneration(tracker.buffer)) {
+      tracker.confirmCount += 1;
+      if (tracker.confirmCount >= STREAM_DEGENERATION_CONFIRM_COUNT) {
+        return true;
+      }
+    } else {
+      tracker.confirmCount = 0;
+    }
   }
-  tracker.charsSinceLastCheck = 0;
-  if (detectStreamDegeneration(tracker.buffer)) {
-    tracker.confirmCount += 1;
-    return tracker.confirmCount >= STREAM_DEGENERATION_CONFIRM_COUNT;
-  }
-  tracker.confirmCount = 0;
   return false;
 }
 
@@ -482,7 +487,7 @@ function wrapStreamFnDetectDegeneration(
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then(stream =>
+      return Promise.resolve(maybeStream).then((stream) =>
         wrapStreamDetectDegeneration(stream, onDegeneration),
       );
     }
@@ -1541,7 +1546,7 @@ export async function runEmbeddedAttempt(
         if (typeof orig !== "function") {
           throw new TypeError(
             "AgentSession._isRetryableError missing or renamed; " +
-            "pi-coding-agent internals changed — update the rate-limit auto-retry override",
+              "pi-coding-agent internals changed — update the rate-limit auto-retry override",
           );
         }
         (activeSession as any)._isRetryableError = function (msg: any) {
@@ -2575,7 +2580,9 @@ export async function runEmbeddedAttempt(
           let stripped = 0;
           for (;;) {
             const leaf = sessionManager.getLeafEntry();
-            if (!leaf) { break; }
+            if (!leaf) {
+              break;
+            }
             if (leaf.type !== "message") {
               if (leaf.parentId) {
                 sessionManager.branch(leaf.parentId);
@@ -2598,7 +2605,8 @@ export async function runEmbeddedAttempt(
               msg.role === "user" &&
               Array.isArray(msg.content) &&
               msg.content.some(
-                (c: any) => c.type === "text" && typeof c.text === "string" && c.text.includes(params.prompt),
+                (c: any) =>
+                  c.type === "text" && typeof c.text === "string" && c.text.includes(params.prompt),
               );
             if (!isEmptyFailedAssistant && !isDuplicateUser) {
               if (isFailedStop || msg.role === "toolResult") {
