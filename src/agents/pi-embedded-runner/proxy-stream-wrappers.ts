@@ -7,6 +7,7 @@ import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -20,19 +21,6 @@ function resolveKilocodeAppHeaders(): Record<string, string> {
 // tmpfix: cacheStyle needs provider-level OpenRouter-Anthropic detection
 export function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
   return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
-}
-
-
-function mapThinkingLevelToOpenRouterReasoningEffort(
-  thinkingLevel: ThinkLevel,
-): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
-  if (thinkingLevel === "off") {
-    return "none";
-  }
-  if (thinkingLevel === "adaptive") {
-    return "medium";
-  }
-  return thinkingLevel;
 }
 
 function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
@@ -54,11 +42,11 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   ) {
     const reasoningObj = existingReasoning as Record<string, unknown>;
     if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-      reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+      reasoningObj.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
     }
   } else if (!existingReasoning) {
     payloadObj.reasoning = {
-      effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
     };
   }
 }

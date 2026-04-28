@@ -1,9 +1,15 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { SafeOpenError, readFileWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
@@ -118,7 +124,19 @@ function getNodeErrorCode(error: unknown): string | undefined {
   return String((error as { code?: unknown }).code);
 }
 
-function shouldSkipScriptPreflightPathError(error: unknown): boolean {
+type FsSafeModule = typeof import("../infra/fs-safe.js");
+
+let fsSafeModulePromise: Promise<FsSafeModule> | undefined;
+
+async function loadFsSafeModule(): Promise<FsSafeModule> {
+  fsSafeModulePromise ??= import("../infra/fs-safe.js");
+  return await fsSafeModulePromise;
+}
+
+function shouldSkipScriptPreflightPathError(
+  error: unknown,
+  SafeOpenError: FsSafeModule["SafeOpenError"],
+): boolean {
   if (error instanceof SafeOpenError) {
     return true;
   }
@@ -951,6 +969,7 @@ async function validateScriptFileForShellBleed(params: {
     return;
   }
 
+  const { SafeOpenError, readFileWithinRoot } = await loadFsSafeModule();
   for (const relOrAbsPath of target.relOrAbsPaths) {
     const absPath = path.isAbsolute(relOrAbsPath)
       ? path.resolve(relOrAbsPath)
@@ -978,7 +997,7 @@ async function validateScriptFileForShellBleed(params: {
       });
       content = safeRead.buffer.toString("utf-8");
     } catch (error) {
-      if (shouldSkipScriptPreflightPathError(error)) {
+      if (shouldSkipScriptPreflightPathError(error, SafeOpenError)) {
         // Preflight validation is best-effort: skip path/read failures and
         // continue to execute the command normally.
         continue;
@@ -1022,6 +1041,16 @@ async function validateScriptFileForShellBleed(params: {
       }
     }
   }
+}
+
+function shouldSkipExecScriptPreflight(params: {
+  host: ExecHost;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): boolean {
+  const upstreamSkip = params.host === "gateway" && params.security === "full" && params.ask === "off";
+  const localFullSecurityBypass = params.security === "full";
+  return localFullSecurityBypass || upstreamSkip;
 }
 
 type ParsedExecApprovalCommand = {
@@ -1601,6 +1630,7 @@ export function createExecTool(
           approvalRunningNoticeMs,
           warnings,
           notifySessionKey,
+          notifyOnExit,
           trustedSafeBinDirs,
         });
       }
@@ -1656,7 +1686,9 @@ export function createExecTool(
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
-      if (security !== "full") {
+      // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
+      // before we execute and burn tokens in cron loops.
+      if (!shouldSkipExecScriptPreflight({ host, security, ask })) {
         await validateScriptFileForShellBleed({ command: params.command, workdir });
       }
 
@@ -1784,3 +1816,7 @@ export function createExecTool(
 }
 
 export const execTool = createExecTool();
+
+export const __testing = {
+  validateScriptFileForShellBleed,
+};

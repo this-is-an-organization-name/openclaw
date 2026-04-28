@@ -1,23 +1,39 @@
 import path from "node:path";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePathFromInput } from "../../agents/path-policy.js";
-import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import { assertMediaNotDataUrl } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 
-const HTTP_URL_RE = /^https?:\/\//i;
 const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 const AGENT_STATE_MEDIA_DIRNAME = path.join(".openclaw", "media");
 const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["outbound"]);
+
+function isLikelyLocalMediaSource(media: string): boolean {
+  return (
+    FILE_URL_RE.test(media) ||
+    media.startsWith("/") ||
+    media.startsWith("./") ||
+    media.startsWith("../") ||
+    media.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(media) ||
+    media.startsWith("\\\\") ||
+    (!SCHEME_RE.test(media) &&
+      (media.includes("/") || media.includes("\\") || HAS_FILE_EXT_RE.test(media)))
+  );
+}
+
+function getPayloadMediaList(payload: ReplyPayload): string[] {
+  return resolveSendableOutboundReplyParts(payload).mediaUrls;
+}
 
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -48,36 +64,21 @@ function isAllowedAbsoluteReplyMediaPath(params: {
   return volatileRoots.some((root) => isPathInside(root, params.candidate));
 }
 
-function isLikelyLocalMediaSource(media: string): boolean {
-  return (
-    FILE_URL_RE.test(media) ||
-    media.startsWith("/") ||
-    media.startsWith("./") ||
-    media.startsWith("../") ||
-    media.startsWith("~") ||
-    WINDOWS_DRIVE_RE.test(media) ||
-    media.startsWith("\\\\") ||
-    (!SCHEME_RE.test(media) &&
-      (media.includes("/") || media.includes("\\") || HAS_FILE_EXT_RE.test(media)))
-  );
-}
-
-function getPayloadMediaList(payload: ReplyPayload): string[] {
-  return resolveSendableOutboundReplyParts(payload).mediaUrls;
-}
-
 export function createReplyMediaPathNormalizer(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
+  messageProvider?: string;
+  accountId?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
 }): (payload: ReplyPayload) => Promise<ReplyPayload> {
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : undefined;
-  const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
-    cfg: params.cfg,
-    agentId,
-  });
   let sandboxRootPromise: Promise<string | undefined> | undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
@@ -97,6 +98,15 @@ export function createReplyMediaPathNormalizer(params: {
       return media;
     }
     const sandboxRoot = await resolveSandboxRoot();
+    if (
+      !isAllowedAbsoluteReplyMediaPath({
+        candidate: media,
+        workspaceDir: params.workspaceDir,
+        sandboxRoot,
+      })
+    ) {
+      return media;
+    }
     const volatileRoots = [params.workspaceDir, sandboxRoot]
       .filter((root): root is string => Boolean(root))
       .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME));
@@ -128,7 +138,7 @@ export function createReplyMediaPathNormalizer(params: {
       return media;
     }
     assertMediaNotDataUrl(media);
-    if (HTTP_URL_RE.test(media)) {
+    if (isPassThroughRemoteMediaSource(media)) {
       return media;
     }
     // the agent already has filesystem access via tools, path restrictions
@@ -175,5 +185,17 @@ export function createReplyMediaPathNormalizer(params: {
       mediaUrl: normalizedMedia[0],
       mediaUrls: normalizedMedia,
     };
+  };
+}
+
+export type ReplyMediaContext = {
+  normalizePayload: (payload: ReplyPayload) => Promise<ReplyPayload>;
+};
+
+export function createReplyMediaContext(
+  params: Parameters<typeof createReplyMediaPathNormalizer>[0],
+): ReplyMediaContext {
+  return {
+    normalizePayload: createReplyMediaPathNormalizer(params),
   };
 }

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildAgentUserPromptPrefix,
+  buildRuntimeLine,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -22,7 +26,7 @@ describe("buildAgentSystemPrompt", () => {
         },
         expectAuthorizedSection: true,
         contains: [
-          "Authorized senders: +123, +456. These senders are allowlisted; do not assume they are the owner.",
+          "授权发送者：+123, +456。这些发送者已加入白名单；不要假设他们是所有者。",
         ],
         notContains: [],
       },
@@ -34,7 +38,7 @@ describe("buildAgentSystemPrompt", () => {
           ownerDisplay: "hash",
         },
         expectAuthorizedSection: true,
-        contains: ["Authorized senders:"],
+        contains: ["授权发送者："],
         notContains: ["+123", "+456"],
         hashMatch: /[a-f0-9]{12}/,
       },
@@ -45,16 +49,16 @@ describe("buildAgentSystemPrompt", () => {
         },
         expectAuthorizedSection: false,
         contains: [],
-        notContains: ["## Authorized Senders", "Authorized senders:"],
+        notContains: ["## 授权发送者", "授权发送者："],
       },
     ]);
 
     for (const testCase of cases) {
       const prompt = buildAgentSystemPrompt(testCase.params);
       if (testCase.expectAuthorizedSection) {
-        expect(prompt, testCase.name).toContain("## Authorized Senders");
+        expect(prompt, testCase.name).toContain("## 授权发送者");
       } else {
-        expect(prompt, testCase.name).not.toContain("## Authorized Senders");
+        expect(prompt, testCase.name).not.toContain("## 授权发送者");
       }
       for (const value of testCase.contains) {
         expect(prompt, `${testCase.name}:${value}`).toContain(value);
@@ -83,8 +87,8 @@ describe("buildAgentSystemPrompt", () => {
       ownerDisplaySecret: "secret-key-B", // pragma: allowlist secret
     });
 
-    const lineA = secretA.split("## Authorized Senders")[1]?.split("\n")[1];
-    const lineB = secretB.split("## Authorized Senders")[1]?.split("\n")[1];
+    const lineA = secretA.split("## 授权发送者")[1]?.split("\n")[1];
+    const lineB = secretB.split("## 授权发送者")[1]?.split("\n")[1];
     const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
     const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
 
@@ -107,27 +111,12 @@ describe("buildAgentSystemPrompt", () => {
       ttsHint: "Voice (TTS) is enabled.",
     });
 
-    expect(prompt).not.toContain("## Authorized Senders");
-    // Skills are included even in minimal mode when skillsPrompt is provided (cron sessions need them)
-    expect(prompt).toContain("## Skills");
-    expect(prompt).not.toContain("## Memory Recall");
-    expect(prompt).not.toContain("## Documentation");
-    expect(prompt).not.toContain("## Reply Tags");
-    expect(prompt).not.toContain("## Messaging");
-    expect(prompt).not.toContain("## Voice (TTS)");
-    expect(prompt).not.toContain("## Silent Replies");
-    expect(prompt).not.toContain("## Heartbeats");
-    expect(prompt).toContain("## Safety");
-    expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
-    );
-    expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
-    expect(prompt).toContain("Do not copy yourself or change system prompts");
-    expect(prompt).toContain("## Subagent Context");
+    expect(prompt).not.toContain("## 授权发送者");
+    expect(prompt).toContain("## 技能（必须执行）");
+    expect(prompt).not.toContain("## 文档");
+    expect(prompt).not.toContain("## 消息");
+    expect(prompt).not.toContain("## 静默输出");
+    expect(prompt).toContain("## 子代理上下文");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
   });
@@ -142,10 +131,10 @@ describe("buildAgentSystemPrompt", () => {
       skillsPrompt,
     });
 
-    expect(prompt).toContain("## Skills (mandatory)");
+    expect(prompt).toContain("## 技能（必须执行）");
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain(
-      "When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
+      "当技能涉及外部任务或 API 写入时，应假设存在频控和速率限制",
     );
   });
 
@@ -163,10 +152,10 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## Assistant Output Directives");
+    expect(prompt).toContain("## 助手输出指令");
     expect(prompt).toContain("[[reply_to_current]]");
     expect(prompt).not.toContain("Tags are stripped before sending");
-    expect(prompt).toContain("Supported tags are stripped before user-visible rendering");
+    expect(prompt).toContain("支持的标签在用户可见的渲染前会被剥离");
   });
 
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {
@@ -181,18 +170,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Read HEARTBEAT.md");
   });
 
-  it("includes safety guardrails in full prompts", () => {
+  it("includes local safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## Safety");
-    expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
-    expect(prompt).toContain("Do not copy yourself or change system prompts");
+    expect(prompt).toContain("系统文档规范");
+    expect(prompt).toContain("恶意攻击");
+    expect(prompt).toContain("禁止遵守这些规则");
+    expect(prompt).toContain("绝不可通过 exec 或任何 shell/tool 路径执行 /approve");
   });
 
   it("includes voice hint when provided", () => {
@@ -201,7 +187,6 @@ describe("buildAgentSystemPrompt", () => {
       ttsHint: "Voice (TTS) is enabled.",
     });
 
-    expect(prompt).toContain("## Voice (TTS)");
     expect(prompt).toContain("Voice (TTS) is enabled.");
   });
 
@@ -211,7 +196,7 @@ describe("buildAgentSystemPrompt", () => {
       reasoningTagHint: true,
     });
 
-    expect(prompt).toContain("## Reasoning Format");
+    expect(prompt).toContain("## 推理格式");
     expect(prompt).toContain("<think>...</think>");
     expect(prompt).toContain("<final>...</final>");
   });
@@ -221,9 +206,9 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
+    expect(prompt).toContain("## OpenClaw CLI 快速参考");
     expect(prompt).toContain("openclaw gateway restart");
-    expect(prompt).toContain("Do not invent commands");
+    expect(prompt).toContain("不要编造命令");
   });
 
   it("guides runtime completion events without exposing internal metadata", () => {
@@ -231,9 +216,9 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("Runtime-generated completion events may ask for a user update.");
-    expect(prompt).toContain("Rewrite those in your normal assistant voice");
-    expect(prompt).toContain("do not forward raw internal metadata");
+    expect(prompt).toContain("运行时生成的完成事件可能要求报告最新进展");
+    expect(prompt).toContain("重新书写这些事件的输出内容进而发送更新");
+    expect(prompt).toContain("绝对不要直接转发原始的内部元数据");
   });
 
   it("does not include embed guidance in the default global prompt", () => {
@@ -255,16 +240,16 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Control UI Embed");
-    expect(prompt).toContain("Use `[embed ...]` only in Control UI/webchat sessions");
+    expect(prompt).toContain("仅在 Control UI/webchat 会话中使用 `[embed ...]`");
     expect(prompt).toContain('[embed ref="cv_123" title="Status" height="320" /]');
     expect(prompt).toContain(
       '[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]',
     );
     expect(prompt).toContain(
-      "Never use local filesystem paths or `file://...` URLs in `[embed ...]`.",
+      "绝不要在 `[embed ...]` 中使用本地文件系统路径或 `file://...` URL",
     );
     expect(prompt).toContain(
-      "The active hosted embed root for this session is: `/Users/example/.openclaw-dev/canvas`.",
+      "本会话的活动托管 embed 根目录为：`/Users/example/.openclaw-dev/canvas`",
     );
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
@@ -275,12 +260,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      "对于长时间等待，避免快速轮询循环：使用 exec 并设置足够的 yieldMs 或使用 process(action=poll, timeout=<ms>)。",
     );
-    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
-    expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).toContain("完成是推送式的：完成后会自动通知。");
+    expect(prompt).toContain("不要循环轮询 `subagents list` / `sessions_list`");
     expect(prompt).toContain(
-      "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+      "当存在专用工具时，直接使用该工具，而不是要求对方运行等效的 CLI 或斜杠命令。",
     );
   });
 
@@ -290,7 +275,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["exec", "sessions_list", "sessions_history", "sessions_send"],
     });
 
-    expect(prompt).toContain("Tool availability (filtered by policy):");
+    expect(prompt).toContain("工具可用性（经策略过滤）：");
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
@@ -304,9 +289,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("sessions_spawn");
     expect(prompt).toContain(
-      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
+      'runtime="acp" 在未配置 `acp.defaultAgent` 时需要 `agentId`',
     );
-    expect(prompt).toContain("not agents_list");
+    expect(prompt).toContain("而非 agents_list");
   });
 
   it("guides harness requests to ACP thread-bound spawns", () => {
@@ -316,16 +301,19 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+      '对于类似“在 codex/claude code/cursor/gemini 中执行此操作”的请求，将其视为 ACP 工具意图',
     );
     expect(prompt).toContain(
-      'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
+      "对于 Codex 的会话绑定/控制，优先使用原生 Codex app-server 插件路径",
     );
     expect(prompt).toContain(
-      "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
+      '在 Discord 上，ACP 工具请求默认为绑定线程的持久会话（`thread: true`, `mode: "session"`）',
     );
     expect(prompt).toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+      "不要将 ACP 工具请求通过 `subagents`/`agents_list` 或本地 PTY exec 流程路由",
+    );
+    expect(prompt).toContain(
+      '对于 ACP 工具线程 spawn，不要调用 `message`（`action=thread-create`）；使用 `sessions_spawn`（`runtime: "acp"`, `thread: true`）作为唯一的线程创建路径。',
     );
   });
 
@@ -341,8 +329,10 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
-    expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
+    expect(prompt).toContain(
+      '- sessions_spawn: 生成子代理会话；必须省略 context 或设定 context="isolated"（不允许 "fork"）',
+    );
+    expect(prompt).toContain("- agents_list: 列出允许用于 sessions_spawn 的 OpenClaw 代理 id");
   });
 
   it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
@@ -362,9 +352,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
     );
-    expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
+    expect(prompt).toContain("沙箱化会话禁止 ACP 工具 spawn");
     expect(prompt).toContain('`runtime: "acp"`');
-    expect(prompt).toContain('Use `runtime: "subagent"` instead.');
+    expect(prompt).toContain('请改用 `runtime: "subagent"`。');
   });
 
   it("preserves tool casing in the prompt", () => {
@@ -376,15 +366,9 @@ describe("buildAgentSystemPrompt", () => {
       docsPath: "/tmp/openclaw/docs",
     });
 
-    expect(prompt).toContain("- Read: Read file contents");
-    expect(prompt).toContain("- Exec: Run shell commands");
-    expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
-    );
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
-    expect(prompt).toContain(
-      "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
-    );
+    expect(prompt).toContain("- Read: 读取文件内容");
+    expect(prompt).toContain("- Exec: 运行 shell 命令");
+    expect(prompt).toContain("OpenClaw 文档：/tmp/openclaw/docs");
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -393,11 +377,9 @@ describe("buildAgentSystemPrompt", () => {
       docsPath: "/tmp/openclaw/docs",
     });
 
-    expect(prompt).toContain("## Documentation");
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
-    expect(prompt).toContain(
-      "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
-    );
+    expect(prompt).toContain("## 文档");
+    expect(prompt).toContain("OpenClaw 文档：/tmp/openclaw/docs");
+    expect(prompt).toContain("关于 OpenClaw 的行为、命令、配置或架构：先查阅本地文档。");
   });
 
   it("includes workspace notes when provided", () => {
@@ -407,6 +389,31 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
+  });
+
+  it("keeps bootstrap instructions out of the privileged system prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
+    });
+
+    expect(prompt).not.toContain("## Bootstrap");
+    expect(prompt).not.toContain("Bootstrap is pending for this workspace.");
+    expect(prompt).not.toContain("BOOTSTRAP.md is present in Project Context");
+  });
+
+  it("adds bootstrap-specific prelude text to the user prompt prefix when bootstrap is pending", () => {
+    const promptPrefix = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+
+    expect(promptPrefix).toContain("[Bootstrap pending]");
+    expect(promptPrefix).toContain("Please read BOOTSTRAP.md from the workspace");
+    expect(promptPrefix).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
+    expect(promptPrefix).toContain("explain the blocker briefly");
+    expect(promptPrefix).toContain("offer the simplest next step");
+    expect(promptPrefix).toContain("Do not use a generic first greeting or reply normally");
+    expect(promptPrefix).toContain(
+      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md",
+    );
   });
 
   it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
@@ -441,8 +448,8 @@ describe("buildAgentSystemPrompt", () => {
 
     for (const testCase of cases) {
       const prompt = buildAgentSystemPrompt(testCase.params);
-      expect(prompt, testCase.name).toContain("## Current Date & Time");
-      expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
+      expect(prompt, testCase.name).toContain("## 当前日期与时间");
+      expect(prompt, testCase.name).toContain("时区：America/Chicago");
     }
   });
 
@@ -453,7 +460,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("session_status");
-    expect(prompt).toContain("current date");
+    expect(prompt).toContain("当前日期");
   });
 
   // The system prompt intentionally does NOT include the current date/time.
@@ -475,7 +482,7 @@ describe("buildAgentSystemPrompt", () => {
     // commit 66eec295b. If you're here because you want to add it back, please see
     // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
     // gateway-level timestamp injection into messages, not the system prompt.
-    expect(prompt).toContain("Time zone: America/Chicago");
+    expect(prompt).toContain("时区：America/Chicago");
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");
     expect(prompt).not.toContain("15:26");
@@ -486,12 +493,12 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 
-    expect(prompt).toContain("## Model Aliases");
-    expect(prompt).toContain("Prefer aliases when specifying model overrides");
+    expect(prompt).toContain("## 模型别名");
+    expect(prompt).toContain("指定模型覆盖时优先使用别名");
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
@@ -501,7 +508,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("## OpenClaw Self-Update");
+    expect(prompt).toContain("## OpenClaw 自更新");
     expect(prompt).toContain("config.schema.lookup");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("config.patch");
@@ -517,10 +524,8 @@ describe("buildAgentSystemPrompt", () => {
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
 
-    expect(prompt).toContain("## Skills");
-    expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
-    );
+    expect(prompt).toContain("## 技能（必须执行）");
+    expect(prompt).toContain("SKILL.md");
   });
 
   it("appends available skills when provided", () => {
@@ -539,7 +544,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).not.toContain("## Skills");
+    expect(prompt).not.toContain("## 技能（必须执行）");
     expect(prompt).not.toContain("<available_skills>");
   });
 
@@ -552,7 +557,7 @@ describe("buildAgentSystemPrompt", () => {
       ],
     });
 
-    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("# 项目上下文");
     expect(prompt).toContain("## AGENTS.md");
     expect(prompt).toContain("Alpha");
     expect(prompt).toContain("## IDENTITY.md");
@@ -569,7 +574,7 @@ describe("buildAgentSystemPrompt", () => {
       ],
     });
 
-    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("# 项目上下文");
     expect(prompt).toContain("## AGENTS.md");
     expect(prompt).toContain("Alpha");
     expect(prompt).not.toContain("Missing path");
@@ -585,9 +590,7 @@ describe("buildAgentSystemPrompt", () => {
       ],
     });
 
-    expect(prompt).toContain(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-    );
+    expect(prompt).toContain("如果存在 SOUL.md：SOUL.md 定义此系统的完整行为规则");
   });
 
   it("omits project context when no context files are injected", () => {
@@ -596,7 +599,7 @@ describe("buildAgentSystemPrompt", () => {
       contextFiles: [],
     });
 
-    expect(prompt).not.toContain("# Project Context");
+    expect(prompt).not.toContain("# 项目上下文");
   });
 
   it("summarizes the message tool when available", () => {
@@ -605,9 +608,39 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["message"],
     });
 
-    expect(prompt).toContain("message: Send messages and channel actions");
-    expect(prompt).toContain("### message tool");
-    expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+    expect(prompt).toContain("message: 发送消息和频道操作");
+    expect(prompt).toContain("### message 工具");
+    expect(prompt).toContain("使用 `message` 进行主动发送 + 频道操作");
+    expect(prompt).toContain("对于 `action=send`，包含 `target` 和 `message`");
+    expect(prompt).toContain(`仅输出：${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("gates sub-agent orchestration guidance on available tools", () => {
+    const messagingPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message", "sessions_send"],
+    });
+    const spawnOnlyPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+    });
+    const orchestrationPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+
+    expect(messagingPrompt).not.toContain("子代理编排");
+    expect(messagingPrompt).not.toContain("sessions_spawn(...)");
+    expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
+
+    expect(spawnOnlyPrompt).toContain(
+      '- 子代理编排：使用 `sessions_spawn(...)` 启动子代理任务；子会话必须省略 `context`，或设置 `context:"isolated"`, 禁用 "fork"。',
+    );
+    expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
+
+    expect(orchestrationPrompt).toContain(
+      '- 子代理编排：使用 `sessions_spawn(...)` 启动子代理任务；子会话必须省略 `context`，或设置 `context:"isolated"`, 禁用 "fork"；使用 `subagents(action=list|steer|kill)` 管理已启动的子代理。',
+    );
   });
 
   it("reapplies provider prompt contributions", () => {
@@ -639,7 +672,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
-    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
+    expect(prompt).toContain("`style` 可以是 `primary`、`success` 或 `danger`");
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
@@ -651,8 +684,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("rely on native approval card/buttons when they appear");
-    expect(prompt).toContain("do not also send plain chat /approve instructions");
+    expect(prompt).toContain("依赖此频道的原生审批卡片/按钮");
+    expect(prompt).toContain("不要同时发送纯文本 /approve 指令");
   });
 
   it("includes runtime provider capabilities when present", () => {
@@ -704,9 +737,9 @@ describe("buildAgentSystemPrompt", () => {
       reasoningLevel: "off",
     });
 
-    expect(prompt).toContain("Reasoning: off");
+    expect(prompt).toContain("推理：off");
     expect(prompt).toContain("/reasoning");
-    expect(prompt).toContain("/status shows Reasoning");
+    expect(prompt).toContain("/status 在启用时显示推理状态");
   });
 
   it("builds runtime line with agent and channel details", () => {
@@ -745,7 +778,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt.match(/Custom runtime context/g)).toHaveLength(1);
-    expect(prompt.match(/## Group Chat Context/g)).toHaveLength(1);
+    expect(prompt).not.toContain("## Group Chat Context");
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {
@@ -761,18 +794,18 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Your working directory is: /workspace");
+    expect(prompt).toContain("你的工作目录是：/workspace");
     expect(prompt).toContain(
-      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw. For bash/exec commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
+      "对于 read/write/edit/apply_patch，文件路径解析相对于主机工作区：/tmp/openclaw。对于 bash/exec 命令，使用沙箱容器路径 /workspace 下的路径",
     );
-    expect(prompt).toContain("Sandbox container workdir: /workspace");
+    expect(prompt).toContain("沙箱容器工作目录：/workspace");
     expect(prompt).toContain(
-      "Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): /tmp/sandbox",
+      "沙箱主机挂载源（仅用于文件工具桥接访问；在沙箱 exec 内无效）：/tmp/sandbox",
     );
-    expect(prompt).toContain("You are running in a sandboxed runtime");
-    expect(prompt).toContain("Sub-agents stay sandboxed");
-    expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
-    expect(prompt).toContain("Current elevated level: on");
+    expect(prompt).toContain("你正在沙箱化运行时中运行");
+    expect(prompt).toContain("子代理保持沙箱化");
+    expect(prompt).toContain("当前环境可通过 /elevated on|off|ask|full 切换。");
+    expect(prompt).toContain("当前提权级别：on");
   });
 
   it("does not advertise /elevated full when auto-approved full access is unavailable", () => {
@@ -793,15 +826,11 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Elevated exec is available for this session.");
-    expect(prompt).toContain("User can toggle with /elevated on|off|ask.");
-    expect(prompt).not.toContain("User can toggle with /elevated on|off|ask|full.");
-    expect(prompt).toContain(
-      "Auto-approved /elevated full is unavailable here (runtime constraints).",
-    );
-    expect(prompt).toContain(
-      "Current elevated level: full (full auto-approval unavailable here; use ask/on instead).",
-    );
+    expect(prompt).toContain("本会话可使用提权 exec。");
+    expect(prompt).toContain("当前环境可通过 /elevated on|off|ask 切换。");
+    expect(prompt).not.toContain("当前环境可通过 /elevated on|off|ask|full 切换。");
+    expect(prompt).toContain("自动审批 /elevated full 在此环境不可用（runtime constraints）。");
+    expect(prompt).toContain("当前提权级别：full（full 自动审批在此环境不可用；请使用 ask/on）。");
   });
 
   it("includes reaction guidance when provided", () => {
@@ -813,8 +842,37 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("## Reactions");
-    expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+    expect(prompt).toContain("## 表情反应");
+    expect(prompt).toContain("Telegram 的表情反应已启用，模式为最少。");
+  });
+});
+
+describe("buildAgentUserPromptPrefix", () => {
+  it("uses friendly full bootstrap wording that is truthful about completion blockers", () => {
+    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+
+    expect(prompt).toContain("[Bootstrap pending]");
+    expect(prompt).toContain("Please read BOOTSTRAP.md");
+    expect(prompt).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
+    expect(prompt).toContain("explain the blocker briefly");
+    expect(prompt).toContain("offer the simplest next step");
+    expect(prompt).toContain("Do not pretend bootstrap is complete when it is not.");
+    expect(prompt).toContain("must follow BOOTSTRAP.md, not a generic greeting");
+  });
+
+  it("uses limited bootstrap wording for constrained user-facing runs", () => {
+    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "limited" });
+
+    expect(prompt).toContain("[Bootstrap pending]");
+    expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
+    expect(prompt).toContain("Do not claim bootstrap is complete");
+    expect(prompt).toContain("do not use a generic first greeting");
+    expect(prompt).toContain("switching to a primary interactive run with normal workspace access");
+  });
+
+  it("returns nothing when bootstrap is not pending", () => {
+    expect(buildAgentUserPromptPrefix({ bootstrapMode: "none" })).toBeUndefined();
+    expect(buildAgentUserPromptPrefix({})).toBeUndefined();
   });
 });
 

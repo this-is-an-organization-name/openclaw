@@ -17,7 +17,9 @@ import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
     ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(null);
-    saveMediaSource.mockReset();
+    saveMediaSource.mockReset().mockResolvedValue({
+      path: "/Users/peter/.openclaw/media/outbound/persisted.png",
+    });
     vi.unstubAllEnvs();
   });
 
@@ -38,7 +40,7 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
-  it("resolves relative media against the agent workspace even when sandbox exists", async () => {
+  it("keeps workspace-based resolution even when sandbox exists", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -50,23 +52,16 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     const result = await normalize({
-      mediaUrls: ["./out/photo.png", "file:///workspace/screens/final.png"],
+      mediaUrls: ["./out/photo.png"],
     });
 
     expect(result).toMatchObject({
       mediaUrl: path.join("/tmp/agent-workspace", "out", "photo.png"),
-      mediaUrls: [
-        path.join("/tmp/agent-workspace", "out", "photo.png"),
-        "file:///workspace/screens/final.png",
-      ],
+      mediaUrls: [path.join("/tmp/agent-workspace", "out", "photo.png")],
     });
   });
 
-  it("allows arbitrary host-local media paths when workspaceOnly is false and sandbox exists", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
+  it("passes through absolute host-local paths", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
@@ -74,66 +69,16 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     const result = await normalize({
-      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
-    });
-
-    // path restriction removed: agent tools already have unrestricted fs access
-    // when workspaceOnly is false, so blocking MEDIA: was inconsistent
-    expect(result).toMatchObject({
-      mediaUrl: "/Users/peter/.openclaw/media/inbound/photo.png",
-      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
-    });
-    expect(saveMediaSource).not.toHaveBeenCalled();
-  });
-
-  it("resolves relative paths even when tools.fs.workspaceOnly is enabled", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: { tools: { fs: { workspaceOnly: true } } },
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: ["../sandboxes/session-1/screens/final.png"],
+      mediaUrls: ["/Users/peter/Documents/report.pdf"],
     });
 
     expect(result).toMatchObject({
-      mediaUrl: path.resolve("/tmp/agent-workspace", "../sandboxes/session-1/screens/final.png"),
-      mediaUrls: [
-        path.resolve("/tmp/agent-workspace", "../sandboxes/session-1/screens/final.png"),
-      ],
+      mediaUrl: "/Users/peter/Documents/report.pdf",
+      mediaUrls: ["/Users/peter/Documents/report.pdf"],
     });
-    expect(saveMediaSource).not.toHaveBeenCalled();
   });
 
-  it("keeps managed generated media under the shared media root", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
-    });
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
-
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
-      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
-    });
-    expect(saveMediaSource).not.toHaveBeenCalled();
-  });
-
-  it("passes through absolute file URLs without restriction", async () => {
+  it("passes through host file URLs", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
@@ -150,30 +95,95 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
-  it("persists volatile agent-state media from the workspace into host outbound media", async () => {
-    saveMediaSource.mockResolvedValue({
-      path: "/Users/peter/.openclaw/media/outbound/persisted.png",
+  it("keeps managed generated media under shared state roots", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
     });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
+      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
+    });
+  });
+
+  it("keeps managed outbound media under shared state roots", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/outbound/generated.png",
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
+    });
+  });
+
+  it("persists volatile workspace agent-state media into shared outbound media", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
       workspaceDir: "/Users/peter/.openclaw/workspace",
     });
 
+    const source =
+      "/Users/peter/.openclaw/workspace/.openclaw/media/tool-image-generation/generated.png";
     const result = await normalize({
-      mediaUrls: [
-        "/Users/peter/.openclaw/workspace/.openclaw/media/tool-image-generation/generated.png",
-      ],
+      mediaUrls: [source],
     });
 
-    expect(saveMediaSource).toHaveBeenCalledWith(
-      "/Users/peter/.openclaw/workspace/.openclaw/media/tool-image-generation/generated.png",
-      undefined,
-      "outbound",
-    );
+    expect(saveMediaSource).toHaveBeenCalledWith(source, undefined, "outbound");
     expect(result).toMatchObject({
       mediaUrl: "/Users/peter/.openclaw/media/outbound/persisted.png",
       mediaUrls: ["/Users/peter/.openclaw/media/outbound/persisted.png"],
+    });
+  });
+
+  it("deduplicates normalized media while preserving first-seen order", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["./out/photo.png", "/tmp/agent-workspace/out/photo.png", "https://a/b.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/tmp/agent-workspace/out/photo.png",
+      mediaUrls: ["/tmp/agent-workspace/out/photo.png", "https://a/b.png"],
+    });
+  });
+
+  it("drops unsafe media sources without mutating existing text", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      text: "hello",
+      mediaUrls: ["data:image/png;base64,AAAA"],
+    });
+
+    expect(result).toMatchObject({
+      text: "hello",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
     });
   });
 });

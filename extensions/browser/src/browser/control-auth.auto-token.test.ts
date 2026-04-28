@@ -18,7 +18,9 @@ const mocks = vi.hoisted(() => ({
             ? undefined
             : undefined;
       const password = typeof authConfig?.password === "string" ? authConfig.password : undefined;
+      const mode = authConfig?.mode ?? (password ? "password" : token ? "token" : "token");
       return {
+        mode,
         token,
         password,
       };
@@ -66,7 +68,37 @@ function readPersistedConfig(): OpenClawConfig {
   return persistedCfg;
 }
 
+async function expectGeneratedBrowserAuthPersistence(params: {
+  cfg: OpenClawConfig;
+  mode: "none" | "trusted-proxy";
+  generatedAuthField: "token" | "password";
+}) {
+  mocks.loadConfig.mockReturnValue(params.cfg);
+
+  const result = await ensureBrowserControlAuth({ cfg: params.cfg, env: {} as NodeJS.ProcessEnv });
+
+  expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
+  expect(result.auth[params.generatedAuthField]).toBe(result.generatedToken);
+  expect(result.auth[params.generatedAuthField === "token" ? "password" : "token"]).toBeUndefined();
+  expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+  const persistedCfg = readPersistedConfig();
+  expect(persistedCfg?.gateway?.auth?.mode).toBe(params.mode);
+  expect(persistedCfg?.gateway?.auth?.[params.generatedAuthField]).toBe(result.generatedToken);
+  expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+}
+
+async function expectUnresolvedBrowserSecretRefSkipsPersistence(cfg: OpenClawConfig) {
+  mocks.loadConfig.mockReturnValue(cfg);
+
+  const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+  expect(result).toEqual({ auth: {} });
+  expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+}
+
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
+let resolveBrowserControlAuth: typeof import("./control-auth.js").resolveBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password") => {
@@ -100,7 +132,7 @@ describe("ensureBrowserControlAuth", () => {
   };
 
   beforeAll(async () => {
-    ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
+    ({ ensureBrowserControlAuth, resolveBrowserControlAuth } = await import("./control-auth.js"));
   });
 
   beforeEach(() => {
@@ -126,6 +158,100 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.loadConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
+  it("returns only the active credential in password mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "password",
+          token: "inactive-token",
+          password: "active-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "active-password",
+    });
+  });
+
+  it("returns only the resolved active credential when mode is inferred", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          token: "inactive-token",
+          password: "active-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "active-password",
+    });
+  });
+
+  it("returns only the browser token in none mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+          token: "browser-token",
+          password: "inactive-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      token: "browser-token",
+    });
+  });
+
+  it("returns only the active token in token mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "active-token",
+          password: "inactive-password",
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      token: "active-token",
+    });
+  });
+
+  it("returns only the browser password in trusted-proxy mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "inactive-token",
+          password: "browser-password",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({
+      password: "browser-password",
+    });
+  });
+
+  it("does not accept an inactive token in trusted-proxy mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "inactive-token",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        },
+      },
+    };
+
+    expect(resolveBrowserControlAuth(cfg, {} as NodeJS.ProcessEnv)).toEqual({});
   });
 
   it("auto-generates and persists a token when auth is missing", async () => {
@@ -176,18 +302,11 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
-    expect(result.auth.token).toBe(result.generatedToken);
-    expect(result.auth.password).toBeUndefined();
-    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = readPersistedConfig();
-    expect(persistedCfg?.gateway?.auth?.mode).toBe("none");
-    expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
-    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    await expectGeneratedBrowserAuthPersistence({
+      cfg,
+      mode: "none",
+      generatedAuthField: "token",
+    });
   });
 
   it("does not persist over unresolved token SecretRef in none mode", async () => {
@@ -202,13 +321,7 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result).toEqual({ auth: {} });
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    await expectUnresolvedBrowserSecretRefSkipsPersistence(cfg);
   });
 
   it("still auto-generates in none mode when only password SecretRef is set", async () => {
@@ -223,18 +336,11 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
-    expect(result.auth.token).toBe(result.generatedToken);
-    expect(result.auth.password).toBeUndefined();
-    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = readPersistedConfig();
-    expect(persistedCfg?.gateway?.auth?.mode).toBe("none");
-    expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
-    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    await expectGeneratedBrowserAuthPersistence({
+      cfg,
+      mode: "none",
+      generatedAuthField: "token",
+    });
   });
 
   it("auto-generates in trusted-proxy mode and persists browser auth password", async () => {
@@ -246,18 +352,11 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
-    expect(result.auth.password).toBe(result.generatedToken);
-    expect(result.auth.token).toBeUndefined();
-    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = readPersistedConfig();
-    expect(persistedCfg?.gateway?.auth?.mode).toBe("trusted-proxy");
-    expect(persistedCfg?.gateway?.auth?.password).toBe(result.generatedToken);
-    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    await expectGeneratedBrowserAuthPersistence({
+      cfg,
+      mode: "trusted-proxy",
+      generatedAuthField: "password",
+    });
   });
 
   it("still auto-generates in trusted-proxy mode when only token SecretRef is set", async () => {
@@ -273,18 +372,11 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
-    expect(result.auth.password).toBe(result.generatedToken);
-    expect(result.auth.token).toBeUndefined();
-    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = readPersistedConfig();
-    expect(persistedCfg?.gateway?.auth?.mode).toBe("trusted-proxy");
-    expect(persistedCfg?.gateway?.auth?.password).toBe(result.generatedToken);
-    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    await expectGeneratedBrowserAuthPersistence({
+      cfg,
+      mode: "trusted-proxy",
+      generatedAuthField: "password",
+    });
   });
 
   it("does not persist over unresolved password SecretRef in trusted-proxy mode", async () => {
@@ -300,13 +392,7 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
-
-    expect(result).toEqual({ auth: {} });
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    await expectUnresolvedBrowserSecretRefSkipsPersistence(cfg);
   });
 
   it("reuses auth from latest config snapshot", async () => {

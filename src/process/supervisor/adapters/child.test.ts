@@ -2,6 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectRealExitWinsOverSigkillFallback,
+  expectWaitStaysPendingUntilSigkillFallback,
+} from "./test-support.js";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -135,20 +139,9 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     const { adapter } = await createAdapterHarness({ pid: 4567 });
 
-    const waitPromise = adapter.wait();
-    const settled = vi.fn();
-    void waitPromise.then(() => settled());
-
-    adapter.kill();
-
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3999);
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
+      adapter.kill();
+    });
   });
 
   it("prefers real child close over the SIGKILL fallback settle", async () => {
@@ -166,14 +159,16 @@ describe("createChildAdapter", () => {
       return { ...stub, adapter };
     })();
 
-    const waitPromise = adapter.wait();
-    adapter.kill();
-    emitClose(0, "SIGKILL");
-
-    await expect(waitPromise).resolves.toEqual({ code: 0, signal: "SIGKILL" });
-
-    await vi.advanceTimersByTimeAsync(4_001);
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: "SIGKILL" });
+    await expectRealExitWinsOverSigkillFallback({
+      waitPromise: adapter.wait(),
+      triggerKill: () => {
+        adapter.kill();
+      },
+      emitExit: () => {
+        emitClose(0, "SIGKILL");
+      },
+      expected: { code: 0, signal: "SIGKILL" },
+    });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -220,16 +215,68 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks ?? []).toEqual([]);
   });
 
-  it("keeps inherited env when no override env is provided", async () => {
+  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+    setPlatform("darwin");
+
     await createAdapterHarness({
       pid: 3333,
       argv: ["node", "-e", "process.exit(0)"],
     });
 
     const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      argv?: string[];
       options?: { env?: NodeJS.ProcessEnv };
     };
+    expect(spawnArgs.argv).toEqual(["node", "-e", "process.exit(0)"]);
     expect(spawnArgs.options?.env).toBeUndefined();
+  });
+
+  it("wraps Linux child spawns and strips shell-init env", async () => {
+    const originalBashEnv = process.env.BASH_ENV;
+    const originalEnv = process.env.ENV;
+    const originalCdpath = process.env.CDPATH;
+    setPlatform("linux");
+    process.env.BASH_ENV = "/tmp/bashenv";
+    process.env.ENV = "/tmp/env";
+    process.env.CDPATH = "/tmp";
+    try {
+      await createAdapterHarness({
+        pid: 3334,
+        argv: ["/usr/bin/node", "-e", "process.exit(0)"],
+      });
+    } finally {
+      if (originalBashEnv === undefined) {
+        delete process.env.BASH_ENV;
+      } else {
+        process.env.BASH_ENV = originalBashEnv;
+      }
+      if (originalEnv === undefined) {
+        delete process.env.ENV;
+      } else {
+        process.env.ENV = originalEnv;
+      }
+      if (originalCdpath === undefined) {
+        delete process.env.CDPATH;
+      } else {
+        process.env.CDPATH = originalCdpath;
+      }
+    }
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      options?: { env?: NodeJS.ProcessEnv };
+    };
+    expect(spawnArgs.argv?.slice(0, 4)).toEqual([
+      "/bin/sh",
+      "-c",
+      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+      "/usr/bin/node",
+    ]);
+    expect(spawnArgs.argv?.slice(4)).toEqual(["-e", "process.exit(0)"]);
+    expect(spawnArgs.options?.env).toBeDefined();
+    expect(spawnArgs.options?.env?.BASH_ENV).toBeUndefined();
+    expect(spawnArgs.options?.env?.ENV).toBeUndefined();
+    expect(spawnArgs.options?.env?.CDPATH).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {

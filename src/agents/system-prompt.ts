@@ -10,6 +10,11 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { BootstrapMode } from "./bootstrap-mode.js";
+import {
+  buildFullBootstrapPromptLines,
+  buildLimitedBootstrapPromptLines,
+} from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -181,6 +186,34 @@ function buildMemorySection(params: {
   });
 }
 
+export function buildAgentUserPromptPrefix(params: {
+  bootstrapMode?: BootstrapMode;
+}): string | undefined {
+  if (!params.bootstrapMode || params.bootstrapMode === "none") {
+    return undefined;
+  }
+  if (params.bootstrapMode === "limited") {
+    return [
+      "[Bootstrap pending]",
+      ...buildLimitedBootstrapPromptLines({
+        introLine:
+          "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
+        nextStepLine:
+          "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
+      }),
+    ].join("\n");
+  }
+  return [
+    "[Bootstrap pending]",
+    ...buildFullBootstrapPromptLines({
+      readLine:
+        "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
+      firstReplyLine:
+        "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
+    }),
+  ].join("\n");
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -269,10 +302,9 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   }
   return [
     "## 执行倾向",
-    "如果对方要求你做某件事，在同一轮中开始执行。",
-    "当任务可执行时，首先使用真实工具调用或具体行动；不要止步于计划或承诺。",
-    "当工具可用且下一步行动明确时，仅发表评论的轮次是不完整的。",
-    "如果工作需要多个步骤或较长时间，在执行前或执行中发送一条简短的进度更新。",
+    "- 决定执行的请求：在当前轮次开始行动。不要止步于计划或承诺。",
+    "- 文件、git、时间、版本、服务、进程、依赖状态等可变事实必须实时核验。",
+    "- 需要时可以使用后台任务或子代理。",
     "",
   ];
 }
@@ -307,11 +339,20 @@ function buildMessagingSection(params: {
   if (params.isMinimal) {
     return [];
   }
+  const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
+  const hasSubagents = params.availableTools.has("subagents");
+  const subagentOrchestrationGuidance = hasSessionsSpawn
+    ? hasSubagents
+      ? '- 子代理编排：使用 `sessions_spawn(...)` 启动子代理任务；子会话必须省略 `context`，或设置 `context:"isolated"`, 禁用 "fork"；使用 `subagents(action=list|steer|kill)` 管理已启动的子代理。'
+      : '- 子代理编排：使用 `sessions_spawn(...)` 启动子代理任务；子会话必须省略 `context`，或设置 `context:"isolated"`, 禁用 "fork"。'
+    : hasSubagents
+      ? "- 子代理编排：使用 `subagents(action=list|steer|kill)` 管理已启动的子代理。"
+      : "";
   return [
     "## 消息",
     "- 在当前会话中书写输出内容 → 自动路由到来源频道（Signal、Telegram 等）",
     "- 跨会话消息 → 使用 sessions_send(sessionKey, message)",
-    "- 子代理编排 → 使用 subagents(action=list|steer|kill)",
+    subagentOrchestrationGuidance,
     `- 运行时生成的完成事件可能要求报告最新进展。重新书写这些事件的输出内容进而发送更新（绝对不要直接转发原始的内部元数据，也不要默认仅输出 ${SILENT_REPLY_TOKEN}）。`,
     "- 决不能使用 exec/curl 绕开框架直接发送消息；OpenClaw 会在内部处理所有的路由分发。",
     params.availableTools.has("message")
@@ -319,7 +360,7 @@ function buildMessagingSection(params: {
           "",
           "### message 工具",
           "- 使用 `message` 进行主动发送 + 频道操作（投票、反应等）。",
-          "- 对于 `action=send`，包含 `to` 和 `message`。",
+          "- 对于 `action=send`，包含 `target` 和 `message`。",
           `- 如果配置了多个频道，传入 \`channel\` (${params.messageChannelOptions})。`,
           `- 如果你使用 \`message\`（\`action=send\`）来交付终端可见的输出内容，仅输出：${SILENT_REPLY_TOKEN}（避免重复输出）。`,
           params.inlineButtonsEnabled
@@ -457,9 +498,9 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "获取另一个会话/子代理的历史记录",
     sessions_send: "向另一个会话/子代理发送消息",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? '生成一个隔离的子代理或 ACP 编码会话（runtime="acp" 需要 `agentId`，除非配置了 `acp.defaultAgent`；ACP 工具 id 遵循 acp.allowedAgents，而非 agents_list）'
-      : "生成一个隔离的子代理会话",
-    subagents: "列出、引导或终止本请求者会话的子代理运行",
+      ? '生成子代理或 ACP 编码会话；必须省略 context 或设定 context="isolated"（不允许 "fork"）（runtime="acp" 在未配置 `acp.defaultAgent` 时需要 `agentId`；ACP 工具 id 遵循 acp.allowedAgents，而非 agents_list）'
+      : '生成子代理会话；必须省略 context 或设定 context="isolated"（不允许 "fork"）',
+    subagents: "列出、引导或终止当前请求者会话下的子代理运行",
     session_status:
       "显示与 /status 等效的状态卡片（用量 + 时间 + 推理/详细/提权）；用于响应关于模型使用情况的提问（📊 session_status）；可选配置每会话的模型覆盖",
     image: "使用配置的图像模型分析图片",
@@ -676,9 +717,11 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md 不控制工具可用性；这是说明如何使用外部工具的规范。",
     `对于长时间等待，避免快速轮询循环：使用 ${execToolName} 并设置足够的 yieldMs 或使用 ${processToolName}(action=poll, timeout=<ms>)。`,
     "如果任务更复杂或耗时更长，启动一个子代理。完成是推送式的：完成后会自动通知。",
+    '子代理隔离运行。必须省略 `context` 或使用 `context:"isolated"`。禁止使用 `context:"fork"`。',
     ...(acpHarnessSpawnAllowed
       ? [
           '对于类似“在 codex/claude code/cursor/gemini 中执行此操作”的请求，将其视为 ACP 工具意图并调用 `sessions_spawn`，设置 `runtime: "acp"`。',
+          "对于 Codex 的会话绑定/控制，优先使用原生 Codex app-server 插件路径（`/codex bind`、`/codex threads`、`/codex resume`）。仅当对方明确要求 ACP 或 `/acp`，或需要后台子会话且原生 Codex runtime 不可用时，才使用 ACP。",
           '在 Discord 上，ACP 工具请求默认为绑定线程的持久会话（`thread: true`, `mode: "session"`），除非指定。',
           "除非配置了 `acp.defaultAgent`，否则明确设置 `agentId`，不要将 ACP 工具请求通过 `subagents`/`agents_list` 或本地 PTY exec 流程路由。",
           '对于 ACP 工具线程 spawn，不要调用 `message`（`action=thread-create`）；使用 `sessions_spawn`（`runtime: "acp"`, `thread: true`）作为唯一的线程创建路径。',
