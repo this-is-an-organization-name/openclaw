@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import {
   fetchWithSsrFGuard,
   withStrictGuardedFetchMode,
+  withTrustedEnvProxyGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
@@ -130,9 +131,10 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       : [{ dispatcherPolicy, lookupFn }];
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
+      // tmpfix: allow env proxy
       (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
         ? withTrustedExplicitProxyGuardedFetchMode
-        : withStrictGuardedFetchMode)({
+        : withTrustedEnvProxyGuardedFetchMode)({
         url,
         fetchImpl,
         init: requestInit,

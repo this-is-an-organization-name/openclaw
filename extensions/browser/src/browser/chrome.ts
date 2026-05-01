@@ -250,7 +250,17 @@ export function buildOpenClawChromeLaunchArgs(params: {
     args.push("--disable-dev-shm-usage");
   }
   if (!hasChromeProxyControlArg(resolved.extraArgs)) {
-    args.push("--no-proxy-server");
+    // tmpfix: use env proxy if configured, otherwise disable proxy
+    const envProxyUrl =
+      process.env.https_proxy ??
+      process.env.HTTPS_PROXY ??
+      process.env.http_proxy ??
+      process.env.HTTP_PROXY;
+    if (envProxyUrl?.trim()) {
+      args.push(`--proxy-server=${envProxyUrl.trim()}`);
+    } else {
+      args.push("--no-proxy-server");
+    }
   }
   if (resolved.extraArgs.length > 0) {
     args.push(...resolved.extraArgs);
