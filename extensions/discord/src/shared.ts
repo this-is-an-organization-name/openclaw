@@ -61,7 +61,10 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDis
   inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
-  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
+  // top-level allowFrom is intentional: slash cmd owner auth also uses this fn;
+  // dm?.allowFrom alone leaves ownerList empty, blocking owner cmds when only allowFrom is set.
+  resolveAllowFrom: (account: ResolvedDiscordAccount) =>
+    account.config.allowFrom ?? account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
