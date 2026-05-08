@@ -983,6 +983,7 @@ export async function preflightDiscordMessage(
     policy: {
       isGroup: isGuildMessage,
       requireMention: shouldRequireMention,
+      allowedImplicitMentionKinds: [],
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
